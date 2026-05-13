@@ -1,0 +1,16 @@
+{
+  "Central Delhi": {
+    "district": "Central Delhi",
+    "ndvi_pct": 30,
+    "canopy_pct": 21,
+    "avg_temp_c": 34,
+    "built_up_pct": 41,
+    "barren_ha": 18,
+    "available_rooftops": 348,
+    "road_km": 9,
+    "wall_count": 127,
+    "parking_lots": 16,
+    "raw_B4": 1218.1,
+    "raw_B8": 2239.2
+  }
+}

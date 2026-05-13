@@ -1,0 +1,32 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #f9fafb;
+  color: #111827;
+}
+
+/* Leaflet tooltip */
+.district-tooltip {
+  background: rgba(0, 0, 0, 0.75);
+  border: none;
+  border-radius: 4px;
+  color: white;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 8px;
+  box-shadow: none;
+}
+.district-tooltip::before {
+  display: none;
+}
+
+/* Leaflet controls sit above the legend */
+.leaflet-control-zoom {
+  margin-bottom: 8px !important;
+}

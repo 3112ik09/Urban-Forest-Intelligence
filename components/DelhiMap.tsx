@@ -1,0 +1,139 @@
+'use client'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { MapContainer, TileLayer, GeoJSON, useMap } from 'react-leaflet'
+import type { GeoJsonObject } from 'geojson'
+import type { Layer, Map as LeafletMap, PathOptions } from 'leaflet'
+import 'leaflet/dist/leaflet.css'
+
+interface Props {
+  onDistrictClick: (districtName: string, bbox: [number, number, number, number]) => void
+  selectedDistrict: string | null
+  ndviData: Record<string, number>
+  mapRef?: React.MutableRefObject<LeafletMap | null>
+}
+
+function MapCapture({ mapRef }: { mapRef?: React.MutableRefObject<LeafletMap | null> }) {
+  const map = useMap()
+  useEffect(() => {
+    if (mapRef) mapRef.current = map
+  }, [map, mapRef])
+  return null
+}
+
+function getColor(canopy: number): string {
+  if (canopy < 0) return '#e5e7eb'   // not yet analysed
+  if (canopy >= 35) return '#97C459' // high
+  if (canopy >= 15) return '#EF9F27' // medium
+  return '#E24B4A'                   // low / critical
+}
+
+function computeBbox(geometry: GeoJSON.Geometry): [number, number, number, number] {
+  const lons: number[] = []
+  const lats: number[] = []
+
+  function collect(coords: unknown) {
+    if (typeof (coords as number[])[0] === 'number') {
+      const c = coords as [number, number]
+      lons.push(c[0])
+      lats.push(c[1])
+    } else {
+      ;(coords as unknown[]).forEach(collect)
+    }
+  }
+
+  collect((geometry as GeoJSON.Polygon | GeoJSON.MultiPolygon).coordinates)
+  return [Math.min(...lons), Math.min(...lats), Math.max(...lons), Math.max(...lats)]
+}
+
+export default function DelhiMap({ onDistrictClick, selectedDistrict, ndviData, mapRef }: Props) {
+  const [geoJson, setGeoJson] = useState<GeoJsonObject | null>(null)
+  const selectedRef = useRef(selectedDistrict)
+  selectedRef.current = selectedDistrict
+
+  useEffect(() => {
+    fetch('/delhi-districts.geojson')
+      .then(r => r.json())
+      .then(setGeoJson)
+  }, [])
+
+  const styleFeature = useCallback(
+    (feature?: GeoJSON.Feature): PathOptions => {
+      const name: string = feature?.properties?.district_name ?? ''
+      const canopy = ndviData[name] ?? -1
+      const isSelected = name === selectedRef.current
+      return {
+        fillColor: getColor(canopy),
+        fillOpacity: isSelected ? 0.85 : 0.55,
+        color: isSelected ? '#1e40af' : '#6b7280',
+        weight: isSelected ? 3 : 1,
+      }
+    },
+    // Re-derive styles when ndviData or selection changes — GeoJSON re-keyed below
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ndviData, selectedDistrict]
+  )
+
+  const onEachFeature = useCallback(
+    (feature: GeoJSON.Feature, layer: Layer) => {
+      const name: string = feature.properties?.district_name ?? ''
+      const bbox = computeBbox(feature.geometry)
+
+      const path = layer as import('leaflet').Path
+      path.bindTooltip(name, { permanent: false, direction: 'center', className: 'district-tooltip' })
+      path.on('click', () => onDistrictClick(name, bbox))
+      path.on('mouseover', () => path.setStyle({ fillOpacity: 0.8 }))
+      path.on('mouseout', () =>
+        path.setStyle({ fillOpacity: selectedRef.current === name ? 0.85 : 0.55 })
+      )
+    },
+    [onDistrictClick]
+  )
+
+  // Key forces GeoJSON to remount (and re-apply styles) when analysed districts change
+  const geoKey = Object.keys(ndviData).sort().join(',') + (selectedDistrict ?? '')
+
+  return (
+    <div style={{ height: '100%', width: '100%', borderRadius: '12px', overflow: 'hidden' }}>
+      <MapContainer
+        center={[28.6139, 77.209]}
+        zoom={10}
+        style={{ height: '100%', width: '100%' }}
+        zoomControl={true}
+      >
+        <MapCapture mapRef={mapRef} />
+        <TileLayer
+          url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+          attribution="Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics"
+          maxZoom={18}
+        />
+        {geoJson && (
+          <GeoJSON
+            key={geoKey}
+            data={geoJson}
+            style={styleFeature}
+            onEachFeature={onEachFeature}
+          />
+        )}
+      </MapContainer>
+
+      {/* Legend */}
+      <div style={{
+        position: 'absolute', bottom: '32px', left: '16px', zIndex: 1000,
+        background: 'white', borderRadius: '8px', padding: '8px 12px',
+        boxShadow: '0 1px 4px rgba(0,0,0,0.3)', fontSize: '11px', pointerEvents: 'none',
+      }}>
+        {[
+          { color: '#97C459', label: 'Canopy ≥ 35%' },
+          { color: '#EF9F27', label: 'Canopy 15–34%' },
+          { color: '#E24B4A', label: 'Canopy < 15%' },
+          { color: '#e5e7eb', label: 'Not analysed' },
+        ].map(({ color, label }) => (
+          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
+            <div style={{ width: '12px', height: '12px', borderRadius: '2px', background: color, border: '1px solid #d1d5db' }} />
+            <span style={{ color: '#374151' }}>{label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}

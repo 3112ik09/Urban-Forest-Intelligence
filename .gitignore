@@ -1,0 +1,27 @@
+# env — never commit secrets
+.env.local
+.env*.local
+
+# Next.js build output
+.next/
+out/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Python virtualenv
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Vercel
+.vercel
