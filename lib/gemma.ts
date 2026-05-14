@@ -72,102 +72,9 @@ export interface VerifiedZone {
   cooling_impact: string
   gemma_reasoning: string
   planting_method: string
-}
-
-export async function verifySitesWithVision(
-  district: string,
-  barrenHa: number,
-  satelliteBase64: string,
-  apiKey: string
-): Promise<VerifiedZone[]> {
-  const hasImage = satelliteBase64.length > 0
-
-  const prompt = `You are an urban forestry field inspector for ${district}, Delhi.
-${hasImage
-  ? 'Analyse the satellite image provided. Identify all visible land patches suitable for tree planting.'
-  : `No image available. Estimate zones based on ${barrenHa} hectares of barren land in ${district}.`}
-
-Return ONLY a valid JSON array — no explanation, no markdown fences.
-Identify up to 4 zones. Each object must have exactly these keys:
-
-[{
-  "rank": 1,
-  "site_type": "open_ground",
-  "plantable": true,
-  "estimated_trees": 2400,
-  "cooling_impact": "-1.8°C",
-  "gemma_reasoning": "Large open municipal ground in northeast — no structures, road access",
-  "planting_method": "ground planting"
-}]
-
-site_type options: open_ground, road_median, rooftop, parking_lot, park, construction, unknown
-plantable: true only for open_ground, road_median, rooftop, parking_lot, park
-estimated_trees: realistic integer based on site area
-cooling_impact: estimated °C reduction in 8 years`
-
-  const parts = hasImage
-    ? [
-        { inline_data: { mime_type: 'image/jpeg', data: satelliteBase64 } },
-        { text: prompt }
-      ]
-    : [{ text: prompt }]
-
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemma-2-9b-it:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts }],
-          generationConfig: { temperature: 0.2, maxOutputTokens: 700 }
-        })
-      }
-    )
-    const data = await res.json()
-    const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
-    const clean = raw.replace(/```json|```/g, '').trim()
-    const match = clean.match(/\[[\s\S]*\]/)
-    if (!match) return fallbackZones(district, barrenHa)
-    const parsed = JSON.parse(match[0]) as VerifiedZone[]
-    return parsed.filter(z => z.plantable).slice(0, 4)
-  } catch {
-    return fallbackZones(district, barrenHa)
-  }
-}
-
-function fallbackZones(district: string, barrenHa: number): VerifiedZone[] {
-  const zones: VerifiedZone[] = [
-    {
-      rank: 1, site_type: 'open_ground', plantable: true,
-      estimated_trees: Math.round(barrenHa * 0.4 * 650),
-      cooling_impact: `-${(barrenHa * 0.4 * 0.25).toFixed(1)}°C`,
-      gemma_reasoning: `Open municipal ground in ${district} — primary planting opportunity`,
-      planting_method: 'ground planting'
-    },
-    {
-      rank: 2, site_type: 'road_median', plantable: true,
-      estimated_trees: Math.round(barrenHa * 0.3 * 200),
-      cooling_impact: `-${(barrenHa * 0.3 * 0.15).toFixed(1)}°C`,
-      gemma_reasoning: 'Major road medians — avenue planting suitable',
-      planting_method: 'roadside pits'
-    },
-    {
-      rank: 3, site_type: 'park', plantable: true,
-      estimated_trees: Math.round(barrenHa * 0.2 * 400),
-      cooling_impact: `-${(barrenHa * 0.2 * 0.18).toFixed(1)}°C`,
-      gemma_reasoning: 'Underutilised park or institutional ground',
-      planting_method: 'ground planting'
-    },
-    {
-      rank: 4, site_type: 'parking_lot', plantable: true,
-      estimated_trees: Math.round(barrenHa * 0.1 * 80),
-      cooling_impact: `-${(barrenHa * 0.1 * 0.08).toFixed(1)}°C`,
-      gemma_reasoning: 'Parking lot perimeter — shade trees reduce surface heat',
-      planting_method: 'perimeter planting'
-    }
-  ]
-  return zones.filter(z => z.estimated_trees > 0)
+  lat: number
+  lon: number
+  place_name?: string
 }
 
 export const SUPPORTED_LANGUAGES = [
@@ -219,20 +126,20 @@ ${text}`
 export function buildPrompt(params: {
   district: string
   ndvi_pct: number
-  canopy_pct: number
-  avg_temp_c: number
+  green_cover_pct: number
+  estimated_temp_c: number
   built_up_pct: number
   barren_ha: number
 }): { prompt: string; hasLand: boolean } {
-  const { district, ndvi_pct, canopy_pct, avg_temp_c, built_up_pct, barren_ha } = params
+  const { district, ndvi_pct, green_cover_pct, estimated_temp_c, built_up_pct, barren_ha } = params
   const hasLand = barren_ha > 2
 
   const prompt = `You are an urban forestry AI analyst preparing a government policy brief.
 
 District: ${district}, Delhi
 NDVI score: ${ndvi_pct}% (vegetation index from Sentinel-2 satellite)
-Tree canopy cover: ${canopy_pct}%
-Average summer surface temperature: ${avg_temp_c}°C
+Green cover (NDVI-derived): ${green_cover_pct}%
+Est. surface temperature: ${estimated_temp_c}°C
 Built-up area: ${built_up_pct}%
 Available barren land: ${barren_ha} hectares
 

@@ -28,11 +28,8 @@ export async function getGEEToken(): Promise<string> {
 
 // Builds the expression body in the format the EE Python serializer produces.
 // bbox: [minLon, minLat, maxLon, maxLat]
-function buildNDVIExpression(bbox: [number, number, number, number]) {
-  const [minLon, minLat, maxLon, maxLat] = bbox
-
-  // Rectangle corners: [minLon,maxLat], [minLon,minLat], [maxLon,minLat], [maxLon,maxLat]
-  const coordinates = [[[minLon, maxLat], [minLon, minLat], [maxLon, minLat], [maxLon, maxLat]]]
+// polygonCoords: GeoJSON exterior ring(s) — [[[lon,lat],...]] — passed directly to GEE
+function buildNDVIExpression(polygonCoords: number[][][]) {
 
   return {
     expression: {
@@ -42,7 +39,7 @@ function buildNDVIExpression(bbox: [number, number, number, number]) {
           functionInvocationValue: {
             functionName: 'Image.select',
             arguments: {
-              bandSelectors: { constantValue: ['B4', 'B8'] },
+              bandSelectors: { constantValue: ['B2', 'B4', 'B8', 'B11'] },
               input: { argumentReference: '_MAPPING_VAR_0_0' },
             },
           },
@@ -56,7 +53,7 @@ function buildNDVIExpression(bbox: [number, number, number, number]) {
                 functionInvocationValue: {
                   functionName: 'GeometryConstructors.Polygon',
                   arguments: {
-                    coordinates: { constantValue: coordinates },
+                    coordinates: { constantValue: polygonCoords },
                     evenOdd: { constantValue: true },
                   },
                 },
@@ -150,16 +147,67 @@ function buildNDVIExpression(bbox: [number, number, number, number]) {
 }
 
 export interface GEEBandValues {
+  B2: number
   B4: number
   B8: number
+  B11: number
+}
+
+export interface GridCell {
+  cellBbox: [number, number, number, number]
+  center: { lat: number; lon: number }
+  bands: GEEBandValues
+}
+
+function bboxToRing(bbox: [number, number, number, number]): number[][][] {
+  const [minLon, minLat, maxLon, maxLat] = bbox
+  return [[[minLon, maxLat], [minLon, minLat], [maxLon, minLat], [maxLon, maxLat], [minLon, maxLat]]]
+}
+
+// Splits district bbox into rows×cols cells and fetches Sentinel bands for each in parallel.
+// Cells that fail (GEE error / rate limit) are silently dropped via Promise.allSettled.
+export async function fetchSentinelGrid(
+  bbox: [number, number, number, number],
+  token: string,
+  rows = 4,
+  cols = 4
+): Promise<GridCell[]> {
+  const [minLon, minLat, maxLon, maxLat] = bbox
+  const dLon = (maxLon - minLon) / cols
+  const dLat = (maxLat - minLat) / rows
+
+  const cells: Array<Omit<GridCell, 'bands'>> = []
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const cMinLon = minLon + c * dLon
+      const cMinLat = minLat + r * dLat
+      const cMaxLon = cMinLon + dLon
+      const cMaxLat = cMinLat + dLat
+      cells.push({
+        cellBbox: [cMinLon, cMinLat, cMaxLon, cMaxLat],
+        center: { lat: (cMinLat + cMaxLat) / 2, lon: (cMinLon + cMaxLon) / 2 },
+      })
+    }
+  }
+
+  const results = await Promise.allSettled(
+    cells.map(async cell => {
+      const bands = await fetchSentinelBands(bboxToRing(cell.cellBbox), token)
+      return { ...cell, bands }
+    })
+  )
+
+  return results
+    .filter((r): r is PromiseFulfilledResult<GridCell> => r.status === 'fulfilled')
+    .map(r => r.value)
 }
 
 export async function fetchSentinelBands(
-  bbox: [number, number, number, number],
+  polygonCoords: number[][][],
   token: string
 ): Promise<GEEBandValues> {
   const projectId = process.env.GEE_PROJECT_ID!
-  const body = buildNDVIExpression(bbox)
+  const body = buildNDVIExpression(polygonCoords)
 
   const res = await fetch(GEE_COMPUTE_URL(projectId), {
     method: 'POST',
@@ -174,7 +222,9 @@ export async function fetchSentinelBands(
   if (!res.ok) throw new Error(`GEE API error ${res.status}: ${JSON.stringify(data)}`)
 
   const result = data?.result ?? {}
-  const B4 = typeof result.B4 === 'number' ? result.B4 : 800
-  const B8 = typeof result.B8 === 'number' ? result.B8 : 1200
-  return { B4, B8 }
+  const B2  = typeof result.B2  === 'number' ? result.B2  : 600
+  const B4  = typeof result.B4  === 'number' ? result.B4  : 800
+  const B8  = typeof result.B8  === 'number' ? result.B8  : 1200
+  const B11 = typeof result.B11 === 'number' ? result.B11 : 1800
+  return { B2, B4, B8, B11 }
 }

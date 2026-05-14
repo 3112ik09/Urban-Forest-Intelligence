@@ -1,15 +1,17 @@
 'use client'
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { MapContainer, TileLayer, GeoJSON, useMap } from 'react-leaflet'
+import { MapContainer, TileLayer, GeoJSON, Rectangle, useMap } from 'react-leaflet'
 import type { GeoJsonObject } from 'geojson'
 import type { Layer, Map as LeafletMap, PathOptions } from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 
 interface Props {
-  onDistrictClick: (districtName: string, bbox: [number, number, number, number]) => void
+  onDistrictClick: (districtName: string, bbox: [number, number, number, number], polygonCoords: number[][][]) => void
   selectedDistrict: string | null
   ndviData: Record<string, number>
   mapRef?: React.MutableRefObject<LeafletMap | null>
+  dimDistrict?: boolean
+  gridCells?: Array<{ bbox: [number, number, number, number]; score: number; bsi: number }>
 }
 
 function MapCapture({ mapRef }: { mapRef?: React.MutableRefObject<LeafletMap | null> }) {
@@ -45,10 +47,24 @@ function computeBbox(geometry: GeoJSON.Geometry): [number, number, number, numbe
   return [Math.min(...lons), Math.min(...lats), Math.max(...lons), Math.max(...lats)]
 }
 
-export default function DelhiMap({ onDistrictClick, selectedDistrict, ndviData, mapRef }: Props) {
+export default function DelhiMap({ onDistrictClick, selectedDistrict, ndviData, mapRef, dimDistrict, gridCells }: Props) {
   const [geoJson, setGeoJson] = useState<GeoJsonObject | null>(null)
   const selectedRef = useRef(selectedDistrict)
   selectedRef.current = selectedDistrict
+  const dimRef = useRef(dimDistrict)
+  dimRef.current = dimDistrict
+
+  // Map of district name → its Leaflet Path layer, populated by onEachFeature
+  const layersByName = useRef<Map<string, import('leaflet').Path>>(new Map())
+
+  // When dimDistrict flips, update the selected district's fill opacity in-place (no remount)
+  useEffect(() => {
+    layersByName.current.forEach((layer, name) => {
+      if (name === selectedRef.current) {
+        layer.setStyle({ fillOpacity: dimDistrict ? 0.08 : 0.85 })
+      }
+    })
+  }, [dimDistrict])
 
   useEffect(() => {
     fetch('/delhi-districts.geojson')
@@ -78,13 +94,24 @@ export default function DelhiMap({ onDistrictClick, selectedDistrict, ndviData, 
       const name: string = feature.properties?.district_name ?? ''
       const bbox = computeBbox(feature.geometry)
 
+      const geom = feature.geometry as GeoJSON.Polygon | GeoJSON.MultiPolygon
+      const polygonCoords: number[][][] = geom.type === 'MultiPolygon'
+        ? (geom.coordinates[0] as number[][][])
+        : (geom.coordinates as number[][][])
+
       const path = layer as import('leaflet').Path
+      layersByName.current.set(name, path)
       path.bindTooltip(name, { permanent: false, direction: 'center', className: 'district-tooltip' })
-      path.on('click', () => onDistrictClick(name, bbox))
-      path.on('mouseover', () => path.setStyle({ fillOpacity: 0.8 }))
-      path.on('mouseout', () =>
-        path.setStyle({ fillOpacity: selectedRef.current === name ? 0.85 : 0.55 })
-      )
+      path.on('click', () => onDistrictClick(name, bbox, polygonCoords))
+      path.on('mouseover', () => {
+        const isSelected = selectedRef.current === name
+        if (isSelected && dimRef.current) return
+        path.setStyle({ fillOpacity: 0.8 })
+      })
+      path.on('mouseout', () => {
+        const isSelected = selectedRef.current === name
+        path.setStyle({ fillOpacity: isSelected ? (dimRef.current ? 0.08 : 0.85) : 0.55 })
+      })
     },
     [onDistrictClick]
   )
@@ -114,6 +141,21 @@ export default function DelhiMap({ onDistrictClick, selectedDistrict, ndviData, 
             onEachFeature={onEachFeature}
           />
         )}
+        {gridCells?.map((cell, i) => {
+          const [minLon, minLat, maxLon, maxLat] = cell.bbox
+          const color = cell.score >= 60 ? '#ef4444'
+            : cell.score >= 40 ? '#f97316'
+            : cell.score >= 20 ? '#facc15'
+            : '#94a3b8'
+          const fillOpacity = cell.score >= 20 ? 0.28 : 0.08
+          return (
+            <Rectangle
+              key={i}
+              bounds={[[minLat, minLon], [maxLat, maxLon]]}
+              pathOptions={{ color, fillColor: color, fillOpacity, weight: 1, opacity: 0.7 }}
+            />
+          )
+        })}
       </MapContainer>
 
       {/* Legend */}
@@ -123,9 +165,9 @@ export default function DelhiMap({ onDistrictClick, selectedDistrict, ndviData, 
         boxShadow: '0 1px 4px rgba(0,0,0,0.3)', fontSize: '11px', pointerEvents: 'none',
       }}>
         {[
-          { color: '#97C459', label: 'Canopy ≥ 35%' },
-          { color: '#EF9F27', label: 'Canopy 15–34%' },
-          { color: '#E24B4A', label: 'Canopy < 15%' },
+          { color: '#97C459', label: 'Green cover ≥ 35%' },
+          { color: '#EF9F27', label: 'Green cover 15–34%' },
+          { color: '#E24B4A', label: 'Green cover < 15%' },
           { color: '#e5e7eb', label: 'Not analysed' },
         ].map(({ color, label }) => (
           <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>

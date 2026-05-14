@@ -6,15 +6,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== 'POST') return res.status(405).end()
 
   const body = req.body as NDVIResult
-  const { district, ndvi_pct, canopy_pct, avg_temp_c, built_up_pct, barren_ha } = body
+  const { district, ndvi_pct, green_cover_pct, estimated_temp_c, built_up_pct, barren_ha } = body
 
   if (!district) return res.status(400).json({ error: 'district is required' })
 
   const { prompt, hasLand } = buildPrompt({
     district,
     ndvi_pct,
-    canopy_pct,
-    avg_temp_c,
+    green_cover_pct,
+    estimated_temp_c,
     built_up_pct,
     barren_ha,
   })

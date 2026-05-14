@@ -18,6 +18,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false)
   const [ndviData, setNdviData] = useState<Record<string, number>>({})
   const [analysisResult, setAnalysisResult] = useState<FullResult | null>(null)
+  const [zoneActive, setZoneActive] = useState(false)
 
   const mapRef = useRef<LeafletMap | null>(null)
   const zoneMarkerRef = useRef<Marker | null>(null)
@@ -28,8 +29,9 @@ export default function Home() {
     const district = DELHI_DISTRICTS.find(d => d.name === selectedDistrict)
     if (!district) return
 
-    const [lat, lon] = district.center
-    mapRef.current.flyTo([lat, lon], 14, { animate: true, duration: 1.2 })
+    const { lat, lon } = zone
+    setZoneActive(true)
+    mapRef.current.flyTo([lat, lon], 15, { animate: true, duration: 1.2 })
 
     const L = (await import('leaflet')).default
     const color = zone.site_type === 'open_ground' ? '#16a34a'
@@ -52,17 +54,18 @@ export default function Home() {
     })
 
     if (zoneMarkerRef.current) zoneMarkerRef.current.remove()
-    zoneMarkerRef.current = L.marker([lat, lon], { icon })
+    zoneMarkerRef.current = L.marker([zone.lat, zone.lon], { icon })
       .addTo(mapRef.current)
       .bindPopup(`<b>Zone ${zone.rank}</b><br>${zone.gemma_reasoning}`)
       .openPopup()
   }, [selectedDistrict])
 
   const handleDistrictClick = useCallback(
-    async (districtName: string, bbox: [number, number, number, number]) => {
+    async (districtName: string, bbox: [number, number, number, number], polygonCoords: number[][][]) => {
       if (loading) return
 
       setSelectedDistrict(districtName)
+      setZoneActive(false)
 
       // Return instantly from session cache
       const cached = resultCache.current.get(districtName)
@@ -79,12 +82,12 @@ export default function Home() {
         const ndviRes = await fetch('/api/ndvi', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ districtName, bbox }),
+          body: JSON.stringify({ districtName, bbox, polygonCoords }),
         })
         if (!ndviRes.ok) throw new Error(`NDVI API ${ndviRes.status}`)
         const ndviJson: NDVIResult = await ndviRes.json()
 
-        setNdviData(prev => ({ ...prev, [districtName]: ndviJson.canopy_pct }))
+        setNdviData(prev => ({ ...prev, [districtName]: ndviJson.green_cover_pct }))
 
         const gemmaRes = await fetch('/api/analyse', {
           method: 'POST',
@@ -126,6 +129,8 @@ export default function Home() {
             selectedDistrict={selectedDistrict}
             ndviData={ndviData}
             mapRef={mapRef}
+            dimDistrict={zoneActive}
+            gridCells={analysisResult?.grid_cells}
           />
         </div>
 

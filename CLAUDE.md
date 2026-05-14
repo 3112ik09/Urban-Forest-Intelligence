@@ -11,7 +11,6 @@ npm run lint     # ESLint via next lint
 npx tsc --noEmit # type-check without building
 ```
 
-No test suite is configured. Verify behaviour by running the dev server and calling API routes directly:
 
 ```bash
 curl -s -X POST http://localhost:3000/api/ndvi \
@@ -24,6 +23,10 @@ curl -s -X POST http://localhost:3000/api/analyse \
 ```
 
 ## Architecture
+
+See PROJECT_CONTEXT.md for full project history, all architectural decisions,
+known bugs, and planned features before making any changes.
+No test suite is configured. Verify behaviour by running the dev server and calling API routes directly:
 
 **Routing split:** The project deliberately mixes Next.js App Router (`app/`) for the UI and Pages Router (`pages/api/`) for the two serverless functions. Do not move the API routes into `app/api/` — they need to stay in `pages/api/` to keep the Pages Router pipeline.
 

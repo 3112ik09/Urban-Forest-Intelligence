@@ -90,6 +90,11 @@ export default function PlantingCards({ result, onZoneClick }: Props) {
               </span>
             </div>
 
+            {zone.place_name && (
+              <div style={{ fontSize: '11px', color: '#374151', marginBottom: '3px', fontWeight: 500 }}>
+                {zone.place_name}
+              </div>
+            )}
             <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '4px' }}>
               {zone.estimated_trees.toLocaleString()} trees · {zone.planting_method}
             </div>

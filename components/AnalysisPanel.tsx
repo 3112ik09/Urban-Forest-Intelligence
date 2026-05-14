@@ -14,10 +14,11 @@ interface Props {
 }
 
 const STAT_COLOR = (label: string, value: number) => {
-  if (label === 'Canopy cover') {
+  if (label === 'Green cover') {
     return value >= 35 ? '#16a34a' : value >= 15 ? '#d97706' : '#dc2626'
   }
-  if (label === 'Surface temp') return '#dc2626'
+  if (label === 'Est. temp') return '#dc2626'
+  if (label === 'Planting score') return value >= 50 ? '#16a34a' : value >= 30 ? '#d97706' : '#6b7280'
   return '#6b7280'
 }
 
@@ -60,11 +61,12 @@ export default function AnalysisPanel({ district, loading, result, onZoneClick }
       {result && !loading && (
         <>
           {/* Key stats */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', padding: '16px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', padding: '16px' }}>
             {([
-              { label: 'Canopy cover', value: result.canopy_pct, display: `${result.canopy_pct}%` },
-              { label: 'Surface temp', value: result.avg_temp_c, display: `${result.avg_temp_c}°C` },
-              { label: 'Built-up',     value: result.built_up_pct, display: `${result.built_up_pct}%` },
+              { label: 'Green cover',    value: result.green_cover_pct,  display: `${result.green_cover_pct}%` },
+              { label: 'Est. temp',      value: result.estimated_temp_c, display: `${result.estimated_temp_c}°C` },
+              { label: 'Built-up',       value: result.built_up_pct,     display: `${result.built_up_pct}%` },
+              { label: 'Planting score', value: result.plantation_score, display: `${result.plantation_score}/100` },
             ] as const).map(s => (
               <div key={s.label} style={{
                 background: '#f9fafb', borderRadius: '8px', padding: '10px', textAlign: 'center',
