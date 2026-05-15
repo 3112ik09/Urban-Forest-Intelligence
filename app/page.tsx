@@ -130,7 +130,6 @@ export default function Home() {
             ndviData={ndviData}
             mapRef={mapRef}
             dimDistrict={zoneActive}
-            gridCells={analysisResult?.grid_cells}
           />
         </div>
 

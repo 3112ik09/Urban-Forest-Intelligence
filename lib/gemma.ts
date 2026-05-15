@@ -6,9 +6,20 @@ export interface GemmaResponse {
   mode: 'planting' | 'alternative'
 }
 
-export async function callGemma(prompt: string): Promise<string> {
+export interface GemmaImage {
+  base64: string
+  mimeType: 'image/jpeg' | 'image/png'
+}
+
+export async function callGemma(prompt: string, images?: GemmaImage[]): Promise<string> {
+  // Images go first so Gemma can ground them before reading the text analysis request
+  const imageParts = (images ?? []).map(img => ({
+    inlineData: { mimeType: img.mimeType, data: img.base64 },
+  }))
+  const parts = [...imageParts, { text: prompt }]
+
   const body = JSON.stringify({
-    contents: [{ parts: [{ text: prompt }] }],
+    contents: [{ parts }],
     generationConfig: { temperature: 0.4, maxOutputTokens: 1200 },
   })
 
@@ -130,18 +141,36 @@ export function buildPrompt(params: {
   estimated_temp_c: number
   built_up_pct: number
   barren_ha: number
+  zones?: VerifiedZone[]
 }): { prompt: string; hasLand: boolean } {
-  const { district, ndvi_pct, green_cover_pct, estimated_temp_c, built_up_pct, barren_ha } = params
+  const { district, ndvi_pct, green_cover_pct, estimated_temp_c, built_up_pct, barren_ha, zones } = params
   const hasLand = barren_ha > 2
 
-  const prompt = `You are an urban forestry AI analyst preparing a government policy brief.
+  const zoneBlock = zones && zones.length > 0
+    ? `\nTop planting sites identified by satellite analysis:\n` + zones.slice(0, 3).map((z, i) => {
+        const extra = z as unknown as Record<string, unknown>
+        const plantableHa = extra._plantable_ha ?? '?'
+        return (
+          `Site ${i + 1}: ${z.place_name ?? z.site_type} — ` +
+          `${z.gemma_reasoning} — ` +
+          `${plantableHa}ha plantable, ~${z.estimated_trees.toLocaleString()} trees possible, ` +
+          `${z.cooling_impact} cooling potential, method: ${z.planting_method}`
+        )
+      }).join('\n')
+    : ''
 
+  const imageNote = zones && zones.length > 0
+    ? `\nSatellite imagery of the top ${Math.min(zones.length, 3)} planting sites is attached above (one tile per site, in the same order as the site list). Use what you observe in these images to add specific visual detail to your priority action paragraph.\n`
+    : ''
+
+  const prompt = `You are an urban forestry AI analyst preparing a government policy brief.
+${imageNote}
 District: ${district}, Delhi
 NDVI score: ${ndvi_pct}% (vegetation index from Sentinel-2 satellite)
 Green cover (NDVI-derived): ${green_cover_pct}%
 Est. surface temperature: ${estimated_temp_c}°C
 Built-up area: ${built_up_pct}%
-Available barren land: ${barren_ha} hectares
+Available barren land: ${barren_ha} hectares${zoneBlock}
 
 ${
   hasLand
@@ -153,7 +182,7 @@ Output ONLY the following — no explanations, no self-correction, no thinking s
 
 Paragraph 1 (2-3 sentences): Current situation — severity of heat and canopy problem, using specific numbers.
 Paragraph 2 (2-3 sentences): Root cause — why does this district have this canopy level?
-Paragraph 3 (2-3 sentences): Priority action — what should government or NGO do first?
+Paragraph 3 (2-3 sentences): Priority action — what should government or NGO do first, referencing specific sites and visual evidence from the satellite images.
 
 Professional policy language. No bullet points. No headers. No asterisks. Plain prose only.`
 

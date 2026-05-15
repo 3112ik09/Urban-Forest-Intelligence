@@ -1,7 +1,56 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { getGEEToken, fetchSentinelBands, fetchSentinelGrid, type GridCell } from '@/lib/earthengine'
-import { classifyZoneOSM, type OSMClassification } from '@/lib/overpass'
+import { readFileSync } from 'fs'
+import { join } from 'path'
+import {
+  getGEEToken, fetchDWBands, fetchHotspots, fetchOpenGroundPatches, validatePatches,
+  type HotspotZone, type OpenPatch, type ValidatedPatch, type SiteType, type DWBandValues,
+} from '@/lib/earthengine'
 import type { VerifiedZone } from '@/lib/gemma'
+import { getBbox } from '@/lib/districts'
+import { getCityConfig } from '@/lib/cityconfig'
+import type { CityConfig } from '@/lib/cityconfig'
+
+// ── District polygon containment ─────────────────────────────────────────────
+
+interface GeoFeature {
+  properties: { district_name: string }
+  geometry: { type: string; coordinates: unknown[] }
+}
+
+let _districtGeoJSON: { features: GeoFeature[] } | null = null
+function getDistrictGeoJSON() {
+  if (!_districtGeoJSON) {
+    _districtGeoJSON = JSON.parse(
+      readFileSync(join(process.cwd(), 'public/delhi-districts.geojson'), 'utf8')
+    )
+  }
+  return _districtGeoJSON!
+}
+
+function getDistrictRing(districtName: string): [number, number][] | null {
+  const feat = getDistrictGeoJSON().features.find(f => f.properties.district_name === districtName)
+  if (!feat) return null
+  const geom = feat.geometry
+  if (geom.type === 'Polygon') return (geom.coordinates[0] as [number, number][])
+  if (geom.type === 'MultiPolygon') return ((geom.coordinates as unknown[][][])[0][0] as [number, number][])
+  return null
+}
+
+// Ray-casting point-in-polygon; ring is [lon, lat] pairs (GeoJSON order)
+function pointInPolygon(lat: number, lon: number, ring: [number, number][]): boolean {
+  let inside = false
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i]
+    const [xj, yj] = ring[j]
+    if ((yi > lat) !== (yj > lat) && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) {
+      inside = !inside
+    }
+  }
+  return inside
+}
+
+// Survives across requests within the same serverless instance — avoids redundant GEE calls
+const serverCache = new Map<string, NDVIResult>()
 
 export interface NDVIResult {
   district: string
@@ -18,68 +67,237 @@ export interface NDVIResult {
   source: 'gee' | 'fallback'
   verified_zones: VerifiedZone[]
   satellite_image_used: boolean
-  grid_cells?: Array<{ bbox: [number, number, number, number]; score: number; bsi: number }>
+  grid_cells?: Array<{ bbox: [number, number, number, number]; score: number; bare: number; built: number }>
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') return res.status(405).end()
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
 
-  const { districtName, bbox, polygonCoords } = req.body as {
-    districtName: string
-    bbox: [number, number, number, number]
-    polygonCoords: number[][][]
-  }
+  const { districtName, bbox } = req.body as { districtName: string; bbox: [number, number, number, number] }
   if (!districtName || !bbox) return res.status(400).json({ error: 'districtName and bbox required' })
 
+  const cityName = districtName.toLowerCase().includes('delhi') ? 'delhi' : districtName
+  const config = getCityConfig(cityName)
+
+  const cacheKey = `ndvi:v9:${districtName}`
+  const cached = serverCache.get(cacheKey)
+  if (cached) {
+    console.log('[ndvi] cache hit:', districtName)
+    return res.status(200).json(cached)
+  }
+
+  console.log('[ndvi] pipeline start:', districtName)
+
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  let token: string
   try {
-    let baseResult: NDVIResult
-    let verified_zones: VerifiedZone[] = []
+    token = await getGEEToken()
+  } catch (err) {
+    console.warn('[ndvi] GEE auth failed — returning fallback:', err)
+    return res.status(200).json(buildFallbackResult(districtName, bbox))
+  }
 
-    try {
-      const token = await getGEEToken()
-      const coords = polygonCoords?.length ? polygonCoords : bboxToRing(bbox)
+  // ── Phase 1 — Hotspot scan (coarse 4×4 grid) ─────────────────────────────
+  let hotspots: HotspotZone[] = []
+  let districtBands: DWBandValues | null = null
+  const [minLon, minLat, maxLon, maxLat] = bbox
+  const districtRing: number[][][] = [
+    [[minLon, minLat], [maxLon, minLat], [maxLon, maxLat], [minLon, maxLat], [minLon, minLat]],
+  ]
 
-      // District-level stats (single mean over full polygon)
-      const bands = await fetchSentinelBands(coords, token)
-      console.log('[ndvi] district bands:', bands)
-      baseResult = deriveMetrics(districtName, bands, polygonCoords ?? [], bbox, 'gee')
-      console.log('[ndvi] district metrics:', {
-        ndvi_pct: baseResult.ndvi_pct, green_cover_pct: baseResult.green_cover_pct,
-        built_up_pct: baseResult.built_up_pct, barren_ha: baseResult.barren_ha,
-        plantation_score: baseResult.plantation_score,
-      })
+  try {
+    ;[hotspots, districtBands] = await Promise.all([
+      fetchHotspots(bbox, token, config),
+      fetchDWBands(districtRing, token).catch(() => null),
+    ])
+    console.log('[ndvi] P1 hotspots:', hotspots.length)
+  } catch (err) {
+    console.warn('[ndvi] P1 failed:', err)
+    return res.status(200).json(buildFallbackResult(districtName, bbox))
+  }
 
-      // Grid scan — 4×4 cells, ranked by plantation suitability, filtered by OSM
-      console.log('[ndvi] starting 4×4 grid scan for', districtName)
-      const grid = await fetchSentinelGrid(bbox, token)
-      console.log('[ndvi] grid cells returned:', grid.length, '/ 16')
-      const { zones, scoredCells } = await identifyPlantingZones(grid)
-      verified_zones = zones
-      const grid_cells = scoredCells.map(c => ({
-        bbox: c.cellBbox,
-        score: Math.round(c.score),
-        bsi: parseFloat(c.bsi.toFixed(3)),
-      }))
-      return res.status(200).json({ ...baseResult, verified_zones, grid_cells, satellite_image_used: false })
-    } catch (err) {
-      console.error('[ndvi] GEE failed, using fallback:', err)
-      baseResult = getFallbackData(districtName)
-      verified_zones = buildFallbackZones(districtName, baseResult.barren_ha, bbox)
+  // ── Phase 2 — Open ground patch discovery ────────────────────────────────
+  // Always search the full district bbox so overlapping rectangles don't miss
+  // patches inside the actual district. Pre-filter by the real polygon so we
+  // don't waste the 20-patch validation budget on wrong-district blobs.
+  let patches: OpenPatch[] = []
+  const polygonRing = getDistrictRing(districtName)
+
+  try {
+    patches = await fetchOpenGroundPatches(bbox, token, config)
+    console.log('[ndvi] P2 raw patches found:', patches.length)
+
+    if (polygonRing) {
+      const before = patches.length
+      patches = patches.filter(p => pointInPolygon(p.centroid.lat, p.centroid.lon, polygonRing))
+      console.log(`[ndvi] P2 polygon pre-filter: ${before} → ${patches.length}`)
     }
 
-    return res.status(200).json({ ...baseResult, verified_zones, satellite_image_used: false })
+    // Drop blobs > 100ha — these are merged urban fabric, not actionable planting sites
+    const beforeCap = patches.length
+    patches = patches.filter(p => p.areaHa <= 100)
+    if (patches.length < beforeCap) {
+      console.log(`[ndvi] P2 size cap (100ha): ${beforeCap} → ${patches.length}`)
+    }
   } catch (err) {
-    console.error('[ndvi] handler error:', err)
-    return res.status(500).json({ error: 'Internal server error' })
+    console.warn('[ndvi] P2 failed:', err)
   }
+
+  // ── Phase 3 — Validate patches + name them ───────────────────────────────
+  let validated: ValidatedPatch[] = []
+  if (patches.length > 0) {
+    try {
+      validated = await validatePatches(patches, token, config)
+      console.log('[ndvi] P3 validated patches:', validated.length)
+    } catch (err) {
+      console.warn('[ndvi] P3 failed:', err)
+    }
+  }
+
+  // ── Phase 4 — MCDA scoring + ranking ─────────────────────────────────────
+  const zones = buildZones(validated, config)
+  console.log('[ndvi] final zones:', zones.length)
+
+  // ── Derive district-level stats ───────────────────────────────────────────
+  const bands = districtBands ?? DEFAULT_DW_BANDS
+  const canopyPct       = Math.round((bands.trees + bands.shrub_and_scrub) * 100)
+  const builtPct        = Math.round(bands.built * 100)
+  const greenCoverPct   = Math.min(100, canopyPct + Math.round(bands.grass * 100))
+  const estimatedTempC  = Math.round(28 + bands.built * 12 - bands.trees * 8)
+  const plantationScore = Math.round(Math.max(0, Math.min(100,
+    (bands.bare * 0.65 + (1 - (bands.trees + bands.grass + bands.shrub_and_scrub)) * 0.2 - bands.built * 0.15) * 100
+  )))
+
+  const avgLat     = (minLat + maxLat) / 2
+  const districtW  = (maxLon - minLon) * 111320 * Math.cos(avgLat * Math.PI / 180)
+  const districtH  = (maxLat - minLat) * 110570
+  const districtHa = (districtW * districtH) / 10_000
+  const barrenHa   = Math.round(districtHa * bands.bare)
+
+  const finalZones = zones.length > 0 ? zones : buildFallbackZones(districtName, barrenHa, bbox)
+
+  const result: NDVIResult = {
+    district:           districtName,
+    ndvi_pct:           canopyPct,
+    green_cover_pct:    greenCoverPct,
+    estimated_temp_c:   estimatedTempC,
+    built_up_pct:       builtPct,
+    barren_ha:          barrenHa,
+    available_rooftops: Math.round(builtPct * 8.5),
+    road_km:            Math.round((bbox[2] - bbox[0]) * 111 * 4),
+    wall_count:         Math.round(builtPct * 3.1),
+    parking_lots:       Math.round(builtPct * 0.4),
+    plantation_score:   plantationScore,
+    source:             patches.length > 0 ? 'gee' : 'fallback',
+    satellite_image_used: false,
+    verified_zones:     finalZones,
+    grid_cells: validated.map(v => ({
+      bbox: v.polygon.coordinates[0].reduce(
+        (b: [number, number, number, number], p: unknown) => {
+          const pt = p as [number, number]
+          return [Math.min(b[0], pt[0]), Math.min(b[1], pt[1]), Math.max(b[2], pt[0]), Math.max(b[3], pt[1])]
+        },
+        [180, 90, -180, -90] as [number, number, number, number]
+      ),
+      score: 0,
+      bare:  parseFloat(v.bands.bare.toFixed(3)),
+      built: parseFloat(v.bands.built.toFixed(3)),
+    })),
+  }
+
+  serverCache.set(cacheKey, result)
+  return res.status(200).json(result)
 }
 
-const safeDiv = (a: number, b: number) => b === 0 ? 0 : a / b
+// ── MCDA scoring ──────────────────────────────────────────────────────────────
 
-function bboxToRing(bbox: [number, number, number, number]): number[][][] {
-  const [minLon, minLat, maxLon, maxLat] = bbox
-  return [[[minLon, maxLat], [minLon, minLat], [maxLon, minLat], [maxLon, maxLat], [minLon, maxLat]]]
+const SITE_TYPE_BONUS: Record<SiteType, number> = {
+  park_or_green:  0.90,
+  degraded_scrub: 0.70,
+  scrubland:      0.65,
+  vacant_land:    0.60,
+  low_canopy:     0.50,
+  mixed_open:     0.40,
+  unknown:        0.20,
 }
+
+const SITE_TYPE_MAP: Record<SiteType, VerifiedZone['site_type']> = {
+  park_or_green:  'park',
+  degraded_scrub: 'open_ground',
+  scrubland:      'open_ground',
+  vacant_land:    'open_ground',
+  low_canopy:     'open_ground',
+  mixed_open:     'open_ground',
+  unknown:        'unknown',
+}
+
+const PLANTING_METHOD: Record<SiteType, string> = {
+  park_or_green:  'canopy infill — plant between existing trees',
+  degraded_scrub: 'ground planting — clear scrub, plant native species',
+  scrubland:      'ground planting — enrich with native canopy trees',
+  vacant_land:    'ground planting — high density urban forest',
+  low_canopy:     'canopy infill — supplement existing sparse cover',
+  mixed_open:     'ground planting — assess on-site before planting',
+  unknown:        'ground planting — site survey recommended',
+}
+
+function buildZones(patches: ValidatedPatch[], config: CityConfig): VerifiedZone[] {
+  if (patches.length === 0) return []
+
+  const scored = patches.filter(p => p.siteType !== 'unknown').map(p => {
+    const canopyDeficit = Math.max(0, config.targetCanopyPct - (p.bands.trees + p.bands.shrub_and_scrub))
+    const openness      = Math.max(0, 1 - p.bands.built)
+    const areaScore     = Math.min(1, Math.log10(Math.max(p.areaHa, 0.3)) / Math.log10(50))
+    const typeBonus     = SITE_TYPE_BONUS[p.siteType]
+
+    const raw =
+      canopyDeficit * 0.35 +
+      openness      * 0.30 +
+      areaScore     * 0.20 +
+      typeBonus     * 0.15
+
+    return { ...p, raw }
+  })
+
+  const raws = scored.map(s => s.raw)
+  const minR = Math.min(...raws)
+  const maxR = Math.max(...raws)
+  const range = maxR - minR > 0.01 ? maxR - minR : 1
+
+  return scored
+    .map(p => ({ ...p, normScore: Math.round(((p.raw - minR) / range) * 100) }))
+    .sort((a, b) => b.normScore - a.normScore)
+    .slice(0, 5)
+    .map((p, i) => {
+      const plantableHa = parseFloat(Math.min(p.areaHa * 0.70, 40).toFixed(1))
+      return {
+        rank:            i + 1,
+        site_type:       SITE_TYPE_MAP[p.siteType],
+        plantable:       true,
+        estimated_trees: Math.min(25_000, Math.round(plantableHa * 650)),
+        cooling_impact:  `-${Math.min(2.0, plantableHa * 0.12).toFixed(1)}°C`,
+        gemma_reasoning: `${p.siteType.replace(/_/g, ' ')} · ${p.areaHa.toFixed(1)}ha · canopy ${p.canopyPct}% · open ${Math.round((1 - p.bands.built) * 100)}%`,
+        planting_method: PLANTING_METHOD[p.siteType],
+        lat:             p.centroid.lat,
+        lon:             p.centroid.lon,
+        place_name:      p.placeName,
+        _bare:           p.bands.bare,
+        _built:          p.bands.built,
+        _osm_verified:   false,
+        _osm_unknown:    true,
+        _plantable_ha:   plantableHa,
+        _cell_bbox:      p.polygon.coordinates[0].reduce(
+          (b: [number, number, number, number], pt: unknown) => {
+            const c = pt as [number, number]
+            return [Math.min(b[0], c[0]), Math.min(b[1], c[1]), Math.max(b[2], c[0]), Math.max(b[3], c[1])]
+          },
+          [180, 90, -180, -90] as [number, number, number, number]
+        ),
+      } satisfies VerifiedZone & Record<string, unknown>
+    })
+}
+
+// ── Geometry helpers ──────────────────────────────────────────────────────────
 
 function ringAreaHa(ring: number[][]): number {
   let area = 0
@@ -93,20 +311,16 @@ function ringAreaHa(ring: number[][]): number {
 
 function deriveMetrics(
   district: string,
-  bands: { B2: number; B4: number; B8: number; B11: number },
+  bands: DWBandValues,
   polygonCoords: number[][][],
   bbox: [number, number, number, number],
   source: 'gee' | 'fallback'
 ): NDVIResult {
-  const { B2, B4, B8, B11 } = bands
-
-  const ndvi = safeDiv(B8 - B4, B8 + B4)
-  const ndbi = safeDiv(B11 - B8, B11 + B8)
-  const bsi  = safeDiv((B11 + B4) - (B8 + B2), (B11 + B4) + (B8 + B2))
-
-  const ndvi_pct         = Math.round(Math.max(0, Math.min(100, ndvi * 100)))
-  const built_up_pct     = Math.round(Math.max(0, Math.min(100, (ndbi + 1) * 50)))
-  const barren_pct       = Math.round(Math.max(0, Math.min(100, (bsi  + 1) * 50)))
+  const { trees, grass, bare, built, shrub_and_scrub } = bands
+  const greenFrac        = Math.min(1, trees + grass + shrub_and_scrub)
+  const ndvi_pct         = Math.round(greenFrac * 100)
+  const built_up_pct     = Math.round(Math.min(100, built * 100))
+  const barren_pct       = Math.round(Math.min(100, bare  * 100))
   const green_cover_pct  = Math.round(ndvi_pct * 0.85)
   const estimated_temp_c = Math.round(28 + built_up_pct * 0.12 - green_cover_pct * 0.05)
 
@@ -120,7 +334,7 @@ function deriveMetrics(
   const barren_ha = Math.round(totalAreaHa * (barren_pct / 100))
 
   const plantation_score = Math.round(Math.max(0, Math.min(100,
-    ((1 - ndvi) * 0.5 + bsi * 0.35 - ndbi * 0.15) * 100
+    (bare * 0.65 + (1 - greenFrac) * 0.2 - built * 0.15) * 100
   )))
 
   return {
@@ -136,137 +350,39 @@ function deriveMetrics(
     parking_lots:       Math.round(built_up_pct * 0.25),
     plantation_score,
     source,
-    verified_zones: [],
+    verified_zones:       [],
     satellite_image_used: false,
   }
 }
 
-type ScoredCell = GridCell & { ndvi: number; ndbi: number; bsi: number; score: number }
-type ClassifiedCell = ScoredCell & { osm: OSMClassification }
+// ── Fallback path (used when GEE is unreachable) ──────────────────────────────
 
-async function reverseGeocode(lat: number, lon: number): Promise<string> {
-  try {
-    const res = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=14`,
-      {
-        headers: { 'User-Agent': 'delhi-forest-ai/1.0 (ishantkukreti@gmail.com)' },
-        signal: AbortSignal.timeout(5_000),
-      }
-    )
-    if (!res.ok) return ''
-    const data = await res.json()
-    const addr = data.address ?? {}
-    const parts = [
-      addr.suburb || addr.neighbourhood || addr.village || addr.quarter || addr.hamlet || '',
-      addr.city_district || addr.county || '',
-    ].filter(Boolean)
-    return parts.length > 0
-      ? parts.join(', ')
-      : (data.display_name ?? '').split(',').slice(0, 2).join(',').trim()
-  } catch {
-    return ''
-  }
+const DISTRICT_DW_BANDS: Record<string, DWBandValues> = {
+  'Central Delhi':    { trees: 0.04, grass: 0.02, bare: 0.07, built: 0.85, water: 0.01, shrub_and_scrub: 0.01 },
+  'East Delhi':       { trees: 0.08, grass: 0.03, bare: 0.08, built: 0.78, water: 0.01, shrub_and_scrub: 0.02 },
+  'New Delhi':        { trees: 0.30, grass: 0.15, bare: 0.05, built: 0.45, water: 0.02, shrub_and_scrub: 0.03 },
+  'North Delhi':      { trees: 0.18, grass: 0.08, bare: 0.10, built: 0.58, water: 0.04, shrub_and_scrub: 0.02 },
+  'North East Delhi': { trees: 0.06, grass: 0.02, bare: 0.08, built: 0.82, water: 0.01, shrub_and_scrub: 0.01 },
+  'North West Delhi': { trees: 0.20, grass: 0.10, bare: 0.10, built: 0.55, water: 0.02, shrub_and_scrub: 0.03 },
+  'Shahdara':         { trees: 0.07, grass: 0.03, bare: 0.09, built: 0.78, water: 0.02, shrub_and_scrub: 0.01 },
+  'South Delhi':      { trees: 0.24, grass: 0.09, bare: 0.07, built: 0.55, water: 0.01, shrub_and_scrub: 0.04 },
+  'South East Delhi': { trees: 0.12, grass: 0.05, bare: 0.08, built: 0.72, water: 0.01, shrub_and_scrub: 0.02 },
+  'South West Delhi': { trees: 0.16, grass: 0.08, bare: 0.12, built: 0.58, water: 0.02, shrub_and_scrub: 0.04 },
+  'West Delhi':       { trees: 0.15, grass: 0.06, bare: 0.09, built: 0.66, water: 0.01, shrub_and_scrub: 0.03 },
 }
 
-async function identifyPlantingZones(grid: GridCell[]): Promise<{ zones: VerifiedZone[]; scoredCells: ScoredCell[] }> {
-  const scoredCells: ScoredCell[] = grid.map(cell => {
-    const { B2, B4, B8, B11 } = cell.bands
-    const ndvi  = safeDiv(B8 - B4, B8 + B4)
-    const ndbi  = safeDiv(B11 - B8, B11 + B8)
-    const bsi   = safeDiv((B11 + B4) - (B8 + B2), (B11 + B4) + (B8 + B2))
-    const score = Math.max(0, Math.min(100, ((1 - ndvi) * 0.5 + bsi * 0.35 - ndbi * 0.15) * 100))
-    return { ...cell, ndvi, ndbi, bsi, score }
-  }).sort((a, b) => b.score - a.score)
-
-  console.log('[ndvi] grid cell scores:', scoredCells.map(c => ({
-    lat: c.center.lat.toFixed(4), lon: c.center.lon.toFixed(4),
-    bsi: c.bsi.toFixed(3), ndvi: c.ndvi.toFixed(3), ndbi: c.ndbi.toFixed(3),
-    score: c.score.toFixed(1),
-  })))
-
-  // Require BSI > 0.05 — cells below this are not meaningfully barren
-  const candidates = scoredCells.filter(c => c.bsi > 0.05).slice(0, 6)
-  console.log('[ndvi] candidates after BSI filter:', candidates.length)
-
-  const osmResults = await Promise.allSettled(
-    candidates.map(async (cell): Promise<ClassifiedCell> => {
-      const osm = await classifyZoneOSM(cell.center.lat, cell.center.lon)
-      console.log(`[ndvi] OSM ${cell.center.lat.toFixed(4)},${cell.center.lon.toFixed(4)} → ${osm.site_type} (plantable:${osm.plantable})`)
-      return { ...cell, osm }
-    })
-  )
-
-  osmResults.forEach((r, i) => {
-    if (r.status === 'rejected') console.warn(`[ndvi] OSM call ${i} failed:`, r.reason)
-  })
-
-  const plantable = osmResults
-    .filter((r): r is PromiseFulfilledResult<ClassifiedCell> => r.status === 'fulfilled')
-    .map(r => r.value)
-    .filter(z => z.osm.plantable)
-    .slice(0, 4)
-
-  const zones = await Promise.all(plantable.map(async (z, i) => {
-    const [cMinLon, cMinLat, cMaxLon, cMaxLat] = z.cellBbox
-    const cellAreaHa = (cMaxLon - cMinLon) * 111.32 * Math.cos(z.center.lat * Math.PI / 180)
-      * (cMaxLat - cMinLat) * 110.57 * 100
-    const plantableHa = Math.max(1, cellAreaHa * Math.min(0.4, Math.max(0, z.bsi)))
-
-    const osmVerified = z.osm.site_type !== 'unknown'
-    const siteType    = (z.osm.site_type === 'built_up' || z.osm.site_type === 'unknown'
-      ? 'open_ground' : z.osm.site_type) as VerifiedZone['site_type']
-    const osmLabel    = osmVerified
-      ? z.osm.site_type.replace(/_/g, ' ')
-      : 'unverified — OSM has no data here'
-
-    const place_name = await reverseGeocode(z.center.lat, z.center.lon)
-    console.log(`[ndvi] zone ${i + 1}: ${siteType}, plantableHa=${plantableHa.toFixed(1)}, bsi=${z.bsi.toFixed(3)}, place=${place_name || '(none)'}`)
-
-    return {
-      rank: i + 1,
-      site_type: siteType,
-      plantable: true,
-      estimated_trees: Math.min(80_000, Math.round(plantableHa * 650)),
-      cooling_impact: `-${Math.min(2.5, plantableHa * 0.25).toFixed(1)}°C`,
-      gemma_reasoning: `Sentinel-2 BSI ${z.bsi.toFixed(2)}, NDVI ${z.ndvi.toFixed(2)} — ${osmLabel}`,
-      planting_method: z.osm.site_type === 'road_median' ? 'roadside pits'
-        : z.osm.site_type === 'park' ? 'canopy infill'
-        : 'ground planting',
-      lat: z.center.lat,
-      lon: z.center.lon,
-      place_name: place_name || undefined,
-    } satisfies VerifiedZone
-  }))
-
-  return { zones, scoredCells }
-}
-
-const FALLBACKS: Record<string, Omit<NDVIResult, 'district' | 'source' | 'verified_zones' | 'satellite_image_used' | 'plantation_score'>> = {
-  'Central Delhi':    { ndvi_pct: 6,  green_cover_pct: 4,  estimated_temp_c: 38, built_up_pct: 97, barren_ha: 0,  available_rooftops: 847, road_km: 23, wall_count: 312, parking_lots: 41 },
-  'Shahdara':         { ndvi_pct: 8,  green_cover_pct: 5,  estimated_temp_c: 37, built_up_pct: 91, barren_ha: 12, available_rooftops: 523, road_km: 18, wall_count: 241, parking_lots: 28 },
-  'East Delhi':       { ndvi_pct: 10, green_cover_pct: 7,  estimated_temp_c: 36, built_up_pct: 89, barren_ha: 2,  available_rooftops: 612, road_km: 15, wall_count: 278, parking_lots: 31 },
-  'South Delhi':      { ndvi_pct: 32, green_cover_pct: 22, estimated_temp_c: 32, built_up_pct: 71, barren_ha: 4,  available_rooftops: 234, road_km: 9,  wall_count: 189, parking_lots: 22 },
-  'North West Delhi': { ndvi_pct: 28, green_cover_pct: 19, estimated_temp_c: 33, built_up_pct: 74, barren_ha: 7,  available_rooftops: 445, road_km: 15, wall_count: 198, parking_lots: 35 },
-  'North Delhi':      { ndvi_pct: 22, green_cover_pct: 15, estimated_temp_c: 34, built_up_pct: 80, barren_ha: 9,  available_rooftops: 380, road_km: 14, wall_count: 172, parking_lots: 29 },
-  'West Delhi':       { ndvi_pct: 18, green_cover_pct: 12, estimated_temp_c: 35, built_up_pct: 84, barren_ha: 5,  available_rooftops: 420, road_km: 16, wall_count: 190, parking_lots: 32 },
-  'New Delhi':        { ndvi_pct: 35, green_cover_pct: 24, estimated_temp_c: 31, built_up_pct: 68, barren_ha: 3,  available_rooftops: 190, road_km: 8,  wall_count: 145, parking_lots: 18 },
-  'North East Delhi': { ndvi_pct: 9,  green_cover_pct: 6,  estimated_temp_c: 37, built_up_pct: 90, barren_ha: 4,  available_rooftops: 540, road_km: 17, wall_count: 255, parking_lots: 30 },
-  'South West Delhi': { ndvi_pct: 25, green_cover_pct: 17, estimated_temp_c: 33, built_up_pct: 76, barren_ha: 11, available_rooftops: 410, road_km: 13, wall_count: 182, parking_lots: 26 },
-  'South East Delhi': { ndvi_pct: 14, green_cover_pct: 10, estimated_temp_c: 35, built_up_pct: 86, barren_ha: 3,  available_rooftops: 480, road_km: 16, wall_count: 220, parking_lots: 33 },
-}
+const DEFAULT_DW_BANDS: DWBandValues = { trees: 0.15, grass: 0.06, bare: 0.09, built: 0.66, water: 0.01, shrub_and_scrub: 0.03 }
 
 function getFallbackData(districtName: string): NDVIResult {
-  const defaults = {
-    ndvi_pct: 20, green_cover_pct: 14, estimated_temp_c: 34, built_up_pct: 78,
-    barren_ha: 5, available_rooftops: 300, road_km: 12, wall_count: 150, parking_lots: 20,
-  }
-  const base = FALLBACKS[districtName] ?? defaults
-  const plantation_score = Math.round(Math.max(0, Math.min(100,
-    (1 - base.ndvi_pct / 100) * 40
-    + (base.barren_ha > 5 ? 30 : base.barren_ha > 0 ? 15 : 0)
-    - base.built_up_pct * 0.2
-  )))
-  return { district: districtName, source: 'fallback', plantation_score, ...base, verified_zones: [], satellite_image_used: false }
+  const bands = DISTRICT_DW_BANDS[districtName] ?? DEFAULT_DW_BANDS
+  const districtBbox = getBbox(districtName) ?? [77.0, 28.4, 77.3, 28.9] as [number, number, number, number]
+  return deriveMetrics(districtName, bands, [], districtBbox, 'fallback')
+}
+
+function buildFallbackResult(districtName: string, bbox: [number, number, number, number]): NDVIResult {
+  const base = getFallbackData(districtName)
+  const zones = buildFallbackZones(districtName, base.barren_ha, bbox)
+  return { ...base, verified_zones: zones, satellite_image_used: false }
 }
 
 function buildFallbackZones(

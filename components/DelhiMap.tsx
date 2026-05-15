@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { MapContainer, TileLayer, GeoJSON, Rectangle, useMap } from 'react-leaflet'
+import { MapContainer, TileLayer, GeoJSON, useMap } from 'react-leaflet'
 import type { GeoJsonObject } from 'geojson'
 import type { Layer, Map as LeafletMap, PathOptions } from 'leaflet'
 import 'leaflet/dist/leaflet.css'
@@ -11,7 +11,6 @@ interface Props {
   ndviData: Record<string, number>
   mapRef?: React.MutableRefObject<LeafletMap | null>
   dimDistrict?: boolean
-  gridCells?: Array<{ bbox: [number, number, number, number]; score: number; bsi: number }>
 }
 
 function MapCapture({ mapRef }: { mapRef?: React.MutableRefObject<LeafletMap | null> }) {
@@ -47,7 +46,7 @@ function computeBbox(geometry: GeoJSON.Geometry): [number, number, number, numbe
   return [Math.min(...lons), Math.min(...lats), Math.max(...lons), Math.max(...lats)]
 }
 
-export default function DelhiMap({ onDistrictClick, selectedDistrict, ndviData, mapRef, dimDistrict, gridCells }: Props) {
+export default function DelhiMap({ onDistrictClick, selectedDistrict, ndviData, mapRef, dimDistrict }: Props) {
   const [geoJson, setGeoJson] = useState<GeoJsonObject | null>(null)
   const selectedRef = useRef(selectedDistrict)
   selectedRef.current = selectedDistrict
@@ -141,21 +140,6 @@ export default function DelhiMap({ onDistrictClick, selectedDistrict, ndviData, 
             onEachFeature={onEachFeature}
           />
         )}
-        {gridCells?.map((cell, i) => {
-          const [minLon, minLat, maxLon, maxLat] = cell.bbox
-          const color = cell.score >= 60 ? '#ef4444'
-            : cell.score >= 40 ? '#f97316'
-            : cell.score >= 20 ? '#facc15'
-            : '#94a3b8'
-          const fillOpacity = cell.score >= 20 ? 0.28 : 0.08
-          return (
-            <Rectangle
-              key={i}
-              bounds={[[minLat, minLon], [maxLat, maxLon]]}
-              pathOptions={{ color, fillColor: color, fillOpacity, weight: 1, opacity: 0.7 }}
-            />
-          )
-        })}
       </MapContainer>
 
       {/* Legend */}
