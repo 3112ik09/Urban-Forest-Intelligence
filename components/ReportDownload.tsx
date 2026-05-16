@@ -100,7 +100,7 @@ ${recs}
 
 ---
 Powered by Gemma 4 multimodal AI and Google Earth Engine Sentinel-2 data.
-Delhi Urban Forest Intelligence — Gemma 4 Impact Challenge`
+Urban Forest Intelligence — Gemma 4 Impact Challenge`
 }
 
 async function fetchTranslation(text: string, lang: LangCode): Promise<string> {
@@ -129,7 +129,7 @@ async function generatePDF(
 
   doc.setFontSize(16)
   doc.setFont('helvetica', 'bold')
-  doc.text('Delhi Urban Forest Intelligence', 20, 20)
+  doc.text('Urban Forest Intelligence', 20, 20)
 
   doc.setFontSize(11)
   doc.setFont('helvetica', 'normal')
@@ -151,9 +151,9 @@ async function generatePDF(
   doc.setFontSize(8)
   doc.setTextColor(160)
   doc.text(
-    'Delhi Urban Forest Intelligence · Gemma 4 Impact Challenge · Global Resilience Track',
+    'Urban Forest Intelligence · Gemma 4 Impact Challenge · Global Resilience Track',
     20, 285
   )
 
-  doc.save(`delhi-forest-${district.replace(/\s+/g, '-').toLowerCase()}-${lang}.pdf`)
+  doc.save(`urban-forest-${district.replace(/\s+/g, '-').toLowerCase()}-${lang}.pdf`)
 }

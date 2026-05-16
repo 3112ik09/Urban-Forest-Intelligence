@@ -134,8 +134,125 @@ ${text}`
   }
 }
 
+// Internal: raw API call for structured outputs — no chain-of-thought stripping, lower temperature
+async function callGemmaStructured(prompt: string, images: GemmaImage[]): Promise<string> {
+  const imageParts = images.map(img => ({
+    inlineData: { mimeType: img.mimeType, data: img.base64 },
+  }))
+  const body = JSON.stringify({
+    contents: [{ parts: [...imageParts, { text: prompt }] }],
+    generationConfig: { temperature: 0.2, maxOutputTokens: 600 },
+  })
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const res = await fetch(`${GEMMA_URL}?key=${process.env.GEMMA_API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    })
+    const data = await res.json()
+    if (res.status === 500 && attempt < 3) {
+      await new Promise(r => setTimeout(r, attempt * 1500))
+      continue
+    }
+    if (!res.ok) throw new Error(`Gemma API error ${res.status}: ${JSON.stringify(data)}`)
+    const text: string | undefined = data?.candidates?.[0]?.content?.parts?.[0]?.text
+    if (!text) throw new Error('Empty Gemma response')
+    return text.trim()
+  }
+  throw new Error('Gemma API failed after 3 attempts')
+}
+
+/**
+ * Re-ranks MCDA candidate zones using Gemma vision — each zone must have a corresponding
+ * satellite tile image (same order). Returns re-ranked zones with visual gemma_reasoning.
+ * Zones identified as restricted infrastructure (airports, runways, highways) are filtered out.
+ * Falls back to original MCDA order if Gemma fails or returns unparseable output.
+ */
+export async function reRankZonesWithGemma(
+  zones: VerifiedZone[],
+  images: GemmaImage[],
+  cityName?: string,
+): Promise<VerifiedZone[]> {
+  if (zones.length < 2 || images.length === 0) return zones
+
+  const siteList = zones.map((z, i) => {
+    const extra = z as unknown as Record<string, unknown>
+    const ha = extra._plantable_ha ?? '?'
+    return `Site ${i + 1}: ${z.place_name ?? z.site_type.replace(/_/g, ' ')} — ${ha}ha plantable, ${z.gemma_reasoning}`
+  }).join('\n')
+
+  const location = cityName ?? 'this city'
+
+  const prompt = `You are reviewing ${images.length} satellite images of potential urban tree planting sites in ${location}. Images are attached in order: Site 1, Site 2, ..., Site ${images.length}.
+
+Sites being evaluated:
+${siteList}
+
+CRITICAL — Before ranking, examine each image carefully. If a site is clearly any of the following, mark it UNSUITABLE (do NOT rank it):
+• Airport runway, taxiway, apron, or airfield — concrete/asphalt strips, aircraft, runway markings
+• Active motorway, highway, or rail line — fast-moving traffic lanes, railway tracks
+• Military or security-restricted zone
+• Active industrial or water treatment facility
+• Open water — sea, ocean, bay, river, lake, pond, or waterway with no accessible land
+
+For all other sites, rank from most to least suitable for urban tree planting.
+Favour: open bare ground, scrubland, road medians, parks, parking lots.
+Penalise: dense paved surfaces, buildings.
+
+Output ONLY these lines — no other text, no explanations:
+RANK 1: Site N — one sentence describing what you see and why it is suitable
+RANK 2: Site N — one sentence
+...continuing for all suitable sites
+UNSUITABLE: Site N — one sentence explaining why planting is not possible here (airport/runway/highway/etc.)`
+
+  try {
+    const raw = await callGemmaStructured(prompt, images)
+
+    // Zones Gemma marked as restricted infrastructure — exclude from results
+    const unsuitableIndices = new Set<number>()
+    for (const m of raw.matchAll(/UNSUITABLE:\s+Site\s+(\d+)\s*[—–\-]+\s*(.+)/gi)) {
+      const idx = parseInt(m[1]) - 1
+      if (idx >= 0 && idx < zones.length) {
+        unsuitableIndices.add(idx)
+        console.log(`[gemma] reRankZones: Site ${idx + 1} marked UNSUITABLE — ${m[2].trim()}`)
+      }
+    }
+
+    const matches = [...raw.matchAll(/RANK\s+\d+:\s+Site\s+(\d+)\s*[—–\-]+\s*(.+)/gi)]
+
+    const eligibleCount = zones.length - unsuitableIndices.size
+    if (matches.length < Math.ceil(eligibleCount / 2)) {
+      console.warn('[gemma] reRankZones: parsed', matches.length, 'of', eligibleCount, 'eligible sites — falling back to MCDA order (minus unsuitable)')
+      return zones.filter((_, i) => !unsuitableIndices.has(i))
+    }
+
+    const used = new Set<number>()
+    const ranked: VerifiedZone[] = []
+    for (const m of matches) {
+      const idx = parseInt(m[1]) - 1
+      if (idx >= 0 && idx < zones.length && !used.has(idx) && !unsuitableIndices.has(idx)) {
+        used.add(idx)
+        ranked.push({ ...zones[idx], gemma_reasoning: m[2].trim() })
+      }
+    }
+    // Append any non-unsuitable zones Gemma didn't mention
+    zones.forEach((z, i) => { if (!used.has(i) && !unsuitableIndices.has(i)) ranked.push(z) })
+
+    if (unsuitableIndices.size > 0) {
+      console.log(`[gemma] reRankZones: filtered ${unsuitableIndices.size} unsuitable zone(s), ${ranked.length} remain`)
+    }
+
+    return ranked
+  } catch (err) {
+    console.warn('[gemma] reRankZones failed:', err)
+    return zones
+  }
+}
+
 export function buildPrompt(params: {
   district: string
+  cityName?: string
   ndvi_pct: number
   green_cover_pct: number
   estimated_temp_c: number
@@ -143,7 +260,7 @@ export function buildPrompt(params: {
   barren_ha: number
   zones?: VerifiedZone[]
 }): { prompt: string; hasLand: boolean } {
-  const { district, ndvi_pct, green_cover_pct, estimated_temp_c, built_up_pct, barren_ha, zones } = params
+  const { district, cityName, ndvi_pct, green_cover_pct, estimated_temp_c, built_up_pct, barren_ha, zones } = params
   const hasLand = barren_ha > 2
 
   const zoneBlock = zones && zones.length > 0
@@ -165,7 +282,7 @@ export function buildPrompt(params: {
 
   const prompt = `You are an urban forestry AI analyst preparing a government policy brief.
 ${imageNote}
-District: ${district}, Delhi
+District: ${district}${cityName ? `, ${cityName}` : ''}
 NDVI score: ${ndvi_pct}% (vegetation index from Sentinel-2 satellite)
 Green cover (NDVI-derived): ${green_cover_pct}%
 Est. surface temperature: ${estimated_temp_c}°C

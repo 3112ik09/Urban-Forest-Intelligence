@@ -1,33 +1,111 @@
 'use client'
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import dynamic from 'next/dynamic'
 import type { Map as LeafletMap, Marker } from 'leaflet'
 import HeroStats from '@/components/HeroStats'
 import AnalysisPanel from '@/components/AnalysisPanel'
 import type { NDVIResult } from '@/pages/api/ndvi'
 import type { GemmaResponse, VerifiedZone } from '@/lib/gemma'
-import { DELHI_DISTRICTS } from '@/lib/districts'
+import {
+  geocodeCity, fetchCityDistricts, getCityBoundaryGeoJSON,
+  type GeocodedCity, type CityDistrict,
+} from '@/lib/geocoding'
 
 // Leaflet must be client-side only
-const DelhiMap = dynamic(() => import('@/components/DelhiMap'), { ssr: false })
+const CityMap = dynamic(() => import('@/components/CityMap'), { ssr: false })
 
 export type FullResult = NDVIResult & GemmaResponse
 
 export default function Home() {
+  // ── City search ───────────────────────────────────────────────────────────
+  const [cityInput, setCityInput] = useState('')
+  const [currentCity, setCurrentCity] = useState<GeocodedCity | null>(null)
+  const [cityDistricts, setCityDistricts] = useState<CityDistrict[]>([])
+  const [cityBoundary, setCityBoundary] = useState<GeoJSON.FeatureCollection | null>(null)
+  const [geocoding, setGeocoding] = useState(false)
+  const [geocodeError, setGeocodeError] = useState<string | null>(null)
+
+  // ── Analysis state ────────────────────────────────────────────────────────
   const [selectedDistrict, setSelectedDistrict] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [loadingStep, setLoadingStep] = useState(0)
   const [ndviData, setNdviData] = useState<Record<string, number>>({})
   const [analysisResult, setAnalysisResult] = useState<FullResult | null>(null)
+  const [partialNdvi, setPartialNdvi] = useState<NDVIResult | null>(null)
   const [zoneActive, setZoneActive] = useState(false)
 
   const mapRef = useRef<LeafletMap | null>(null)
   const zoneMarkerRef = useRef<Marker | null>(null)
   const resultCache = useRef<Map<string, FullResult>>(new Map())
+  const abortRef = useRef<AbortController | null>(null)
+  const stepTimers = useRef<ReturnType<typeof setTimeout>[]>([])
+  const currentCityRef = useRef<GeocodedCity | null>(null)
+  // ── City search handler ───────────────────────────────────────────────────
+  const handleCitySearch = useCallback(async () => {
+    const input = cityInput.trim()
+    if (!input) return
 
+    setGeocodeError(null)
+    setGeocoding(true)
+    setSelectedDistrict(null)
+    setAnalysisResult(null)
+    setPartialNdvi(null)
+    setNdviData({})
+    setZoneActive(false)
+
+    // Cancel any in-flight analysis
+    if (abortRef.current) abortRef.current.abort()
+    stepTimers.current.forEach(clearTimeout)
+    stepTimers.current = []
+
+    try {
+      const city = await geocodeCity(input)
+      if (!city) {
+        setGeocodeError('City not found — try a more specific name')
+        return
+      }
+
+      setCurrentCity(city)
+      currentCityRef.current = city
+
+      // Fetch districts and boundary in parallel
+      const [districts, boundary] = await Promise.all([
+        fetchCityDistricts(input, city),
+        getCityBoundaryGeoJSON(city.osmType, city.osmId),
+      ])
+
+      // If Overpass returned no districts, treat the whole city as one district
+      const finalDistricts: CityDistrict[] = districts.length > 0
+        ? districts
+        : [{
+            name: city.displayName.split(',')[0].trim(),
+            bbox: city.bbox,
+            center: {
+              lat: (city.bbox[1] + city.bbox[3]) / 2,
+              lon: (city.bbox[0] + city.bbox[2]) / 2,
+            },
+            polygon: [
+              [city.bbox[0], city.bbox[1]],
+              [city.bbox[2], city.bbox[1]],
+              [city.bbox[2], city.bbox[3]],
+              [city.bbox[0], city.bbox[3]],
+              [city.bbox[0], city.bbox[1]],
+            ],
+          }]
+
+      setCityDistricts(finalDistricts)
+      setCityBoundary(boundary)
+    } catch (err) {
+      console.error('[page] city search failed:', err)
+      setGeocodeError('Search failed — please try again')
+    } finally {
+      setGeocoding(false)
+    }
+  }, [cityInput])
+
+  // ── Zone click → fly map to zone ─────────────────────────────────────────
   const handleZoneClick = useCallback(async (zone: VerifiedZone) => {
-    if (!mapRef.current || !selectedDistrict) return
-    const district = DELHI_DISTRICTS.find(d => d.name === selectedDistrict)
-    if (!district) return
+    if (!mapRef.current) return
 
     const { lat, lon } = zone
     setZoneActive(true)
@@ -58,62 +136,183 @@ export default function Home() {
       .addTo(mapRef.current)
       .bindPopup(`<b>Zone ${zone.rank}</b><br>${zone.gemma_reasoning}`)
       .openPopup()
-  }, [selectedDistrict])
+  }, [])
 
-  const handleDistrictClick = useCallback(
-    async (districtName: string, bbox: [number, number, number, number], polygonCoords: number[][][]) => {
-      if (loading) return
+  // ── District click → run analysis pipeline ────────────────────────────────
+  const handleDistrictClick = useCallback(async (district: CityDistrict) => {
+    // Cancel any in-flight request and its pending step timers
+    if (abortRef.current) abortRef.current.abort()
+    stepTimers.current.forEach(clearTimeout)
+    stepTimers.current = []
 
-      setSelectedDistrict(districtName)
-      setZoneActive(false)
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
 
-      // Return instantly from session cache
-      const cached = resultCache.current.get(districtName)
-      if (cached) {
-        setAnalysisResult(cached)
-        setLoading(false)
-        return
+    const districtName = district.name
+    const bbox = district.bbox
+    const city = currentCityRef.current
+
+    setSelectedDistrict(districtName)
+    setZoneActive(false)
+    setPartialNdvi(null)
+
+    // Return instantly from session cache
+    const cacheKey = `${city?.osmId ?? 'local'}:${districtName}`
+    const cached = resultCache.current.get(cacheKey)
+    if (cached) {
+      setAnalysisResult(cached)
+      setLoading(false)
+      setLoadingStep(0)
+      return
+    }
+
+    setLoading(true)
+    setLoadingStep(1)
+    setAnalysisResult(null)
+
+    // Advance through steps during the long ndvi call (steps 1-4 are simulated)
+    stepTimers.current = [
+      setTimeout(() => setLoadingStep(s => Math.max(s, 2)), 5000),
+      setTimeout(() => setLoadingStep(s => Math.max(s, 3)), 11000),
+      setTimeout(() => setLoadingStep(s => Math.max(s, 4)), 17000),
+    ]
+
+    try {
+      const ndviRes = await fetch('/api/ndvi', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          districtName,
+          bbox,
+          districtPolygon: district.polygon,
+          cityName: city?.displayName.split(',')[0].trim() ?? districtName,
+        }),
+        signal: ctrl.signal,
+      })
+      if (!ndviRes.ok) throw new Error(`NDVI API ${ndviRes.status}`)
+
+      // Read NDJSON stream: 'stats' chunk arrives after Phase 1, 'result' after Phase 4b
+      const reader = ndviRes.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let ndviJson: NDVIResult | null = null
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (value) buffer += decoder.decode(value, { stream: !done })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+
+        for (const rawLine of lines) {
+          const line = rawLine.trim()
+          if (!line) continue
+          const chunk = JSON.parse(line) as { type: string } & NDVIResult
+
+          if (chunk.type === 'stats') {
+            stepTimers.current.forEach(clearTimeout)
+            stepTimers.current = [
+              setTimeout(() => setLoadingStep(s => Math.max(s, 4)), 6000),
+            ]
+            setPartialNdvi(chunk)
+            setLoadingStep(3)
+          } else if (chunk.type === 'result') {
+            stepTimers.current.forEach(clearTimeout)
+            stepTimers.current = []
+            ndviJson = chunk
+            setPartialNdvi(chunk)
+            setNdviData(prev => ({ ...prev, [districtName]: chunk.green_cover_pct }))
+            setLoadingStep(5)
+          }
+        }
+        if (done) break
       }
 
-      setLoading(true)
+      if (!ndviJson) throw new Error('NDVI stream ended without result')
+
+      const gemmaRes = await fetch('/api/analyse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...ndviJson,
+          cityName: city?.displayName.split(',')[0].trim() ?? districtName,
+        }),
+        signal: ctrl.signal,
+      })
+      const gemmaJson: GemmaResponse = gemmaRes.ok
+        ? await gemmaRes.json()
+        : { analysis: 'Analysis unavailable — Gemma API error.', mode: ndviJson.barren_ha > 2 ? 'planting' : 'alternative' }
+
+      const fullResult: FullResult = { ...ndviJson, ...gemmaJson }
+      resultCache.current.set(cacheKey, fullResult)
+      setAnalysisResult(fullResult)
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') return
+      console.error('[page] district analysis failed:', err)
       setAnalysisResult(null)
-
-      try {
-        const ndviRes = await fetch('/api/ndvi', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ districtName, bbox, polygonCoords }),
-        })
-        if (!ndviRes.ok) throw new Error(`NDVI API ${ndviRes.status}`)
-        const ndviJson: NDVIResult = await ndviRes.json()
-
-        setNdviData(prev => ({ ...prev, [districtName]: ndviJson.green_cover_pct }))
-
-        const gemmaRes = await fetch('/api/analyse', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(ndviJson),
-        })
-        const gemmaJson: GemmaResponse = gemmaRes.ok
-          ? await gemmaRes.json()
-          : { analysis: 'Analysis unavailable — Gemma API error.', mode: ndviJson.barren_ha > 2 ? 'planting' : 'alternative' }
-
-        const fullResult: FullResult = { ...ndviJson, ...gemmaJson }
-        resultCache.current.set(districtName, fullResult)
-        setAnalysisResult(fullResult)
-      } catch (err) {
-        console.error('[page] district analysis failed:', err)
-        setAnalysisResult(null)
-      } finally {
+    } finally {
+      if (abortRef.current === ctrl) {
+        stepTimers.current.forEach(clearTimeout)
+        stepTimers.current = []
         setLoading(false)
+        setLoadingStep(0)
       }
-    },
-    [loading]
-  )
+    }
+  }, [])
 
   return (
     <main style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: '#f9fafb', overflow: 'hidden' }}>
-      <HeroStats ndviData={ndviData} />
+      <HeroStats
+        ndviData={ndviData}
+        cityName={currentCity?.displayName.split(',')[0].trim()}
+        totalDistricts={cityDistricts.length}
+      />
+
+      {/* City search bar */}
+      <div style={{
+        background: 'white', borderBottom: '1px solid #e5e7eb',
+        padding: '10px 16px', display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0,
+      }}>
+        <input
+          type="text"
+          value={cityInput}
+          onChange={e => setCityInput(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && handleCitySearch()}
+          placeholder="Enter any city — Delhi, Mumbai, London, Nairobi…"
+          style={{
+            flex: 1, padding: '8px 12px', fontSize: '13px',
+            border: '1px solid #e5e7eb', borderRadius: '8px',
+            outline: 'none', color: '#111827',
+          }}
+        />
+        <button
+          onClick={handleCitySearch}
+          disabled={geocoding || !cityInput.trim()}
+          style={{
+            padding: '8px 18px', fontSize: '13px', fontWeight: 600,
+            background: geocoding ? '#f3f4f6' : '#16a34a',
+            color: geocoding ? '#9ca3af' : 'white',
+            border: 'none', borderRadius: '8px', cursor: geocoding ? 'wait' : 'pointer',
+            whiteSpace: 'nowrap', transition: 'background 0.15s',
+          }}
+        >
+          {geocoding ? 'Searching…' : 'Analyse'}
+        </button>
+        {geocodeError && (
+          <span style={{ fontSize: '12px', color: '#dc2626' }}>{geocodeError}</span>
+        )}
+        {currentCity && !geocoding && (() => {
+          const parts = currentCity.displayName.split(',')
+          const resolvedName = parts.length > 1
+            ? `${parts[0].trim()}, ${parts[parts.length - 1].trim()}`
+            : parts[0].trim()
+          return (
+            <span style={{ fontSize: '12px', color: '#6b7280', whiteSpace: 'nowrap', maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <span style={{ color: '#374151', fontWeight: 500 }}>{resolvedName}</span>
+              {' · '}{cityDistricts.length} district{cityDistricts.length !== 1 ? 's' : ''}
+            </span>
+          )
+        })()}
+      </div>
 
       <div style={{
         flex: 1,
@@ -124,7 +323,9 @@ export default function Home() {
         minHeight: 0,
       }}>
         <div style={{ position: 'relative', minHeight: 0 }}>
-          <DelhiMap
+          <CityMap
+            districts={cityDistricts}
+            cityBoundary={cityBoundary}
             onDistrictClick={handleDistrictClick}
             selectedDistrict={selectedDistrict}
             ndviData={ndviData}
@@ -136,8 +337,11 @@ export default function Home() {
         <AnalysisPanel
           district={selectedDistrict}
           loading={loading}
+          loadingStep={loadingStep}
           result={analysisResult}
+          partialResult={partialNdvi}
           onZoneClick={handleZoneClick}
+          cityName={currentCity?.displayName.split(',')[0].trim()}
         />
       </div>
     </main>

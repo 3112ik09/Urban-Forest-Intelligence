@@ -1,10 +1,18 @@
 interface Props {
-  ndviData: Record<string, number> // districtName -> canopy_pct
+  ndviData: Record<string, number>
+  cityName?: string
+  totalDistricts?: number
 }
 
-export default function HeroStats({ ndviData }: Props) {
+export default function HeroStats({ ndviData, cityName, totalDistricts }: Props) {
   const analysed = Object.keys(ndviData).length
   const hotZones = Object.values(ndviData).filter(v => v < 15).length
+
+  const districtSub = analysed === 0
+    ? 'click map to begin'
+    : totalDistricts && totalDistricts > 1
+      ? `of ${totalDistricts} total`
+      : 'analysed'
 
   return (
     <div style={{
@@ -15,7 +23,7 @@ export default function HeroStats({ ndviData }: Props) {
       {/* Brand */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
         <span style={{ fontSize: '18px', fontWeight: 700, color: '#111827', whiteSpace: 'nowrap' }}>
-          Delhi Urban Forest Intelligence
+          Urban Forest Intelligence
         </span>
         <span style={{
           fontSize: '11px', background: '#dcfce7', color: '#166534',
@@ -29,7 +37,7 @@ export default function HeroStats({ ndviData }: Props) {
       <div style={{ marginLeft: 'auto', display: 'flex', gap: '32px' }}>
         {[
           { label: 'Avg heat difference', value: '+5.8°C', sub: 'low vs high canopy zones' },
-          { label: 'Districts analysed',  value: String(analysed), sub: analysed === 0 ? 'click map to begin' : `of 11 total` },
+          { label: 'Districts analysed',  value: String(analysed), sub: districtSub },
           { label: 'Critical heat zones', value: String(hotZones), sub: 'canopy < 15%' },
         ].map(s => (
           <div key={s.label} style={{ textAlign: 'right' }}>

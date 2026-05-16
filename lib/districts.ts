@@ -1,3 +1,7 @@
+/**
+ * @deprecated Use lib/geocoding.ts (fetchCityDistricts) for dynamic multi-city district discovery.
+ * This file is kept as a reference for Delhi's district boundaries.
+ */
 export interface District {
   name: string
   code: string

@@ -1,40 +1,14 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { readFileSync } from 'fs'
-import { join } from 'path'
 import {
   getGEEToken, fetchDWBands, fetchHotspots, fetchOpenGroundPatches, validatePatches,
+  fetchSatelliteTileBase64,
   type HotspotZone, type OpenPatch, type ValidatedPatch, type SiteType, type DWBandValues,
 } from '@/lib/earthengine'
-import type { VerifiedZone } from '@/lib/gemma'
-import { getBbox } from '@/lib/districts'
-import { getCityConfig } from '@/lib/cityconfig'
-import type { CityConfig } from '@/lib/cityconfig'
+import { reRankZonesWithGemma, type VerifiedZone, type GemmaImage } from '@/lib/gemma'
+import { getCityConfig } from '@/lib/cityRegistry'
+import type { CityConfig } from '@/lib/cityRegistry'
 
 // ── District polygon containment ─────────────────────────────────────────────
-
-interface GeoFeature {
-  properties: { district_name: string }
-  geometry: { type: string; coordinates: unknown[] }
-}
-
-let _districtGeoJSON: { features: GeoFeature[] } | null = null
-function getDistrictGeoJSON() {
-  if (!_districtGeoJSON) {
-    _districtGeoJSON = JSON.parse(
-      readFileSync(join(process.cwd(), 'public/delhi-districts.geojson'), 'utf8')
-    )
-  }
-  return _districtGeoJSON!
-}
-
-function getDistrictRing(districtName: string): [number, number][] | null {
-  const feat = getDistrictGeoJSON().features.find(f => f.properties.district_name === districtName)
-  if (!feat) return null
-  const geom = feat.geometry
-  if (geom.type === 'Polygon') return (geom.coordinates[0] as [number, number][])
-  if (geom.type === 'MultiPolygon') return ((geom.coordinates as unknown[][][])[0][0] as [number, number][])
-  return null
-}
 
 // Ray-casting point-in-polygon; ring is [lon, lat] pairs (GeoJSON order)
 function pointInPolygon(lat: number, lon: number, ring: [number, number][]): boolean {
@@ -49,7 +23,81 @@ function pointInPolygon(lat: number, lon: number, ring: [number, number][]): boo
   return inside
 }
 
-// Survives across requests within the same serverless instance — avoids redundant GEE calls
+// Stitches outer-role way segments from a relation into a single ring.
+// Falls back to concatenation if segments don't connect cleanly.
+function stitchRelationRing(
+  segs: [number, number][][],
+): [number, number][] {
+  if (segs.length === 0) return []
+  const result: [number, number][] = [...segs[0]]
+  const remaining = segs.slice(1)
+  while (remaining.length > 0) {
+    const tail = result[result.length - 1]
+    let matched = false
+    for (let i = 0; i < remaining.length; i++) {
+      const seg = remaining[i]
+      const head = seg[0], last = seg[seg.length - 1]
+      if (Math.abs(tail[0] - head[0]) < 1e-5 && Math.abs(tail[1] - head[1]) < 1e-5) {
+        result.push(...seg.slice(1)); remaining.splice(i, 1); matched = true; break
+      }
+      if (Math.abs(tail[0] - last[0]) < 1e-5 && Math.abs(tail[1] - last[1]) < 1e-5) {
+        result.push(...[...seg].reverse().slice(1)); remaining.splice(i, 1); matched = true; break
+      }
+    }
+    if (!matched) { for (const seg of remaining) result.push(...seg); break }
+  }
+  return result
+}
+
+// Fetches restricted infrastructure polygons (airports, runways, taxiways, aprons)
+// from Overpass. Returns rings in [lon, lat] order for use with pointInPolygon.
+// Handles both way elements (flat geometry) and relation elements (stitched from members).
+async function fetchRestrictedPolygons(bbox: [number, number, number, number]): Promise<[number, number][][]> {
+  const [minLon, minLat, maxLon, maxLat] = bbox
+  const query = `[out:json][timeout:20];(` +
+    `way["aeroway"~"aerodrome|runway|taxiway|apron"](${minLat},${minLon},${maxLat},${maxLon});` +
+    `relation["aeroway"="aerodrome"](${minLat},${minLon},${maxLat},${maxLon});` +
+    `way["landuse"~"military|industrial|landfill|quarry|railway"](${minLat},${minLon},${maxLat},${maxLon});` +
+    `relation["landuse"~"military|industrial|landfill|quarry|railway"](${minLat},${minLon},${maxLat},${maxLon});` +
+    `way["railway"~"rail|light_rail|subway|tram"](${minLat},${minLon},${maxLat},${maxLon});` +
+    `way["amenity"="prison"](${minLat},${minLon},${maxLat},${maxLon});` +
+    `way["power"~"plant|substation"](${minLat},${minLon},${maxLat},${maxLon});` +
+    `);out geom;`
+  try {
+    const res = await fetch('https://overpass-api.de/api/interpreter', {
+      method: 'POST',
+      body: `data=${encodeURIComponent(query)}`,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      signal: AbortSignal.timeout(22000),
+    })
+    if (!res.ok) return []
+    const data = await res.json()
+
+    type OverpassNode = { lat: number; lon: number }
+    type OverpassMember = { type: string; role: string; geometry?: OverpassNode[] }
+    type OverpassEl = { type: string; geometry?: OverpassNode[]; members?: OverpassMember[] }
+
+    const polygons: [number, number][][] = []
+    for (const el of (data.elements ?? []) as OverpassEl[]) {
+      if (el.type === 'way' && Array.isArray(el.geometry) && el.geometry.length >= 3) {
+        polygons.push(el.geometry.map(n => [n.lon, n.lat] as [number, number]))
+      } else if (el.type === 'relation' && Array.isArray(el.members)) {
+        // Build outer boundary polygon by stitching outer-role member ways
+        const outerSegs: [number, number][][] = el.members
+          .filter(m => m.type === 'way' && (m.role === 'outer' || m.role === '') && Array.isArray(m.geometry) && m.geometry!.length >= 2)
+          .map(m => m.geometry!.map(p => [p.lon, p.lat] as [number, number]))
+        const ring = stitchRelationRing(outerSegs)
+        if (ring.length >= 3) polygons.push(ring)
+      }
+    }
+    return polygons
+  } catch (err) {
+    console.warn('[ndvi] fetchRestrictedPolygons failed (non-fatal):', err)
+    return []
+  }
+}
+
+// Survives across requests within the same serverless instance
 const serverCache = new Map<string, NDVIResult>()
 
 export interface NDVIResult {
@@ -73,20 +121,38 @@ export interface NDVIResult {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
 
-  const { districtName, bbox } = req.body as { districtName: string; bbox: [number, number, number, number] }
+  const { districtName, bbox, districtPolygon, cityName } = req.body as {
+    districtName: string
+    bbox: [number, number, number, number]
+    districtPolygon?: [number, number][]
+    cityName?: string
+  }
   if (!districtName || !bbox) return res.status(400).json({ error: 'districtName and bbox required' })
 
-  const cityName = districtName.toLowerCase().includes('delhi') ? 'delhi' : districtName
-  const config = getCityConfig(cityName)
+  // Stream NDJSON — emit stats after Phase 1, full result after Phase 4b
+  res.statusCode = 200
+  res.setHeader('Content-Type', 'application/x-ndjson')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('X-Accel-Buffering', 'no')
+  const writeChunk = (obj: object) => res.write(JSON.stringify(obj) + '\n')
 
-  const cacheKey = `ndvi:v9:${districtName}`
+  const resolvedCityName = cityName ?? districtName
+  const config = getCityConfig(resolvedCityName)
+
+  const cacheKey = `ndvi:v13:${resolvedCityName}:${districtName}`
   const cached = serverCache.get(cacheKey)
   if (cached) {
-    console.log('[ndvi] cache hit:', districtName)
-    return res.status(200).json(cached)
+    console.log('[ndvi] cache hit:', cacheKey)
+    writeChunk({ type: 'result', ...cached })
+    res.end()
+    return
   }
 
-  console.log('[ndvi] pipeline start:', districtName)
+  console.log('[ndvi] pipeline start:', districtName, 'city:', resolvedCityName)
+
+  const containmentRing: [number, number][] | null = districtPolygon && districtPolygon.length >= 4
+    ? districtPolygon
+    : null
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   let token: string
@@ -94,50 +160,94 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     token = await getGEEToken()
   } catch (err) {
     console.warn('[ndvi] GEE auth failed — returning fallback:', err)
-    return res.status(200).json(buildFallbackResult(districtName, bbox))
+    writeChunk({ type: 'result', ...buildFallbackResult(districtName, bbox, containmentRing) })
+    res.end()
+    return
   }
 
   // ── Phase 1 — Hotspot scan (coarse 4×4 grid) ─────────────────────────────
   let hotspots: HotspotZone[] = []
   let districtBands: DWBandValues | null = null
   const [minLon, minLat, maxLon, maxLat] = bbox
-  const districtRing: number[][][] = [
+  const bboxRing: number[][][] = [
     [[minLon, minLat], [maxLon, minLat], [maxLon, maxLat], [minLon, maxLat], [minLon, minLat]],
   ]
 
   try {
     ;[hotspots, districtBands] = await Promise.all([
       fetchHotspots(bbox, token, config),
-      fetchDWBands(districtRing, token).catch(() => null),
+      fetchDWBands(bboxRing, token).catch(() => null),
     ])
     console.log('[ndvi] P1 hotspots:', hotspots.length)
   } catch (err) {
     console.warn('[ndvi] P1 failed:', err)
-    return res.status(200).json(buildFallbackResult(districtName, bbox))
+    writeChunk({ type: 'result', ...buildFallbackResult(districtName, bbox) })
+    res.end()
+    return
   }
 
+  // ── Compute district-level stats (available after Phase 1) ───────────────
+  const bands = districtBands ?? GENERIC_URBAN_BANDS
+  const canopyPct       = Math.round((bands.trees + bands.shrub_and_scrub) * 100)
+  const builtPct        = Math.round(bands.built * 100)
+  const greenCoverPct   = Math.min(100, canopyPct + Math.round(bands.grass * 100))
+  const estimatedTempC  = Math.round(28 + bands.built * 12 - bands.trees * 8)
+  const plantationScore = Math.round(Math.max(0, Math.min(100,
+    (bands.bare * 0.65 + (1 - (bands.trees + bands.grass + bands.shrub_and_scrub)) * 0.2 - bands.built * 0.15) * 100
+  )))
+  const avgLat     = (minLat + maxLat) / 2
+  const districtW  = (maxLon - minLon) * 111320 * Math.cos(avgLat * Math.PI / 180)
+  const districtH  = (maxLat - minLat) * 110570
+  const districtHa = (districtW * districtH) / 10_000
+  const barrenHa   = Math.round(districtHa * bands.bare)
+
+  // Emit stats — client shows land cover tiles while zones are discovered
+  writeChunk({
+    type: 'stats',
+    district:           districtName,
+    ndvi_pct:           canopyPct,
+    green_cover_pct:    greenCoverPct,
+    estimated_temp_c:   estimatedTempC,
+    built_up_pct:       builtPct,
+    barren_ha:          barrenHa,
+    available_rooftops: Math.round(builtPct * 8.5),
+    road_km:            Math.round((bbox[2] - bbox[0]) * 111 * 4),
+    wall_count:         Math.round(builtPct * 3.1),
+    parking_lots:       Math.round(builtPct * 0.4),
+    plantation_score:   plantationScore,
+    source:             'gee' as const,
+    verified_zones:     [],
+    satellite_image_used: false,
+  })
+
   // ── Phase 2 — Open ground patch discovery ────────────────────────────────
-  // Always search the full district bbox so overlapping rectangles don't miss
-  // patches inside the actual district. Pre-filter by the real polygon so we
-  // don't waste the 20-patch validation budget on wrong-district blobs.
   let patches: OpenPatch[] = []
-  const polygonRing = getDistrictRing(districtName)
 
   try {
-    patches = await fetchOpenGroundPatches(bbox, token, config)
+    patches = await fetchOpenGroundPatches(bbox, token, config, hotspots.map(h => h.bbox))
     console.log('[ndvi] P2 raw patches found:', patches.length)
 
-    if (polygonRing) {
+    if (containmentRing) {
       const before = patches.length
-      patches = patches.filter(p => pointInPolygon(p.centroid.lat, p.centroid.lon, polygonRing))
+      patches = patches.filter(p => pointInPolygon(p.centroid.lat, p.centroid.lon, containmentRing))
       console.log(`[ndvi] P2 polygon pre-filter: ${before} → ${patches.length}`)
     }
 
-    // Drop blobs > 100ha — these are merged urban fabric, not actionable planting sites
+    // Drop blobs > 100ha — merged urban fabric, not actionable planting sites
     const beforeCap = patches.length
     patches = patches.filter(p => p.areaHa <= 100)
     if (patches.length < beforeCap) {
       console.log(`[ndvi] P2 size cap (100ha): ${beforeCap} → ${patches.length}`)
+    }
+
+    // Filter out patches inside airports, runways, taxiways, aprons, military zones
+    const restrictedPolygons = await fetchRestrictedPolygons(bbox)
+    if (restrictedPolygons.length > 0) {
+      const beforeRestricted = patches.length
+      patches = patches.filter(p =>
+        !restrictedPolygons.some(poly => pointInPolygon(p.centroid.lat, p.centroid.lon, poly))
+      )
+      console.log(`[ndvi] P2 restricted zone filter (${restrictedPolygons.length} polygons): ${beforeRestricted} → ${patches.length}`)
     }
   } catch (err) {
     console.warn('[ndvi] P2 failed:', err)
@@ -158,23 +268,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const zones = buildZones(validated, config)
   console.log('[ndvi] final zones:', zones.length)
 
-  // ── Derive district-level stats ───────────────────────────────────────────
-  const bands = districtBands ?? DEFAULT_DW_BANDS
-  const canopyPct       = Math.round((bands.trees + bands.shrub_and_scrub) * 100)
-  const builtPct        = Math.round(bands.built * 100)
-  const greenCoverPct   = Math.min(100, canopyPct + Math.round(bands.grass * 100))
-  const estimatedTempC  = Math.round(28 + bands.built * 12 - bands.trees * 8)
-  const plantationScore = Math.round(Math.max(0, Math.min(100,
-    (bands.bare * 0.65 + (1 - (bands.trees + bands.grass + bands.shrub_and_scrub)) * 0.2 - bands.built * 0.15) * 100
-  )))
+  // Safety clamp: ensure every zone lat/lon is inside the district polygon.
+  // GEE patches are pre-filtered by containmentRing, but this guards against
+  // edge cases (e.g. patch centroid on polygon border, floating-point rounding).
+  if (containmentRing) {
+    const [minLon, minLat, maxLon, maxLat] = bbox
+    const fallbackLat = (minLat + maxLat) / 2
+    const fallbackLon = (minLon + maxLon) / 2
+    zones.forEach(z => {
+      if (!pointInPolygon(z.lat, z.lon, containmentRing)) {
+        console.warn(`[ndvi] zone ${z.rank} outside district polygon — snapping to centroid`)
+        z.lat = fallbackLat
+        z.lon = fallbackLon
+      }
+    })
+  }
 
-  const avgLat     = (minLat + maxLat) / 2
-  const districtW  = (maxLon - minLon) * 111320 * Math.cos(avgLat * Math.PI / 180)
-  const districtH  = (maxLat - minLat) * 110570
-  const districtHa = (districtW * districtH) / 10_000
-  const barrenHa   = Math.round(districtHa * bands.bare)
+  // ── Phase 4b — Gemma visual re-ranking ────────────────────────────────────
+  let reRankedZones = zones
+  let satelliteImageUsed = false
+  if (zones.length >= 2) {
+    const tileResults = await Promise.allSettled(
+      zones.map(z => fetchSatelliteTileBase64(z.lat, z.lon, 16))
+    )
+    const toRank: VerifiedZone[] = []
+    const rankImages: GemmaImage[] = []
+    const noTile: VerifiedZone[] = []
+    zones.forEach((z, i) => {
+      const r = tileResults[i]
+      if (r.status === 'fulfilled' && r.value) {
+        toRank.push(z)
+        rankImages.push({ base64: r.value, mimeType: 'image/jpeg' })
+      } else {
+        noTile.push(z)
+      }
+    })
+    if (toRank.length >= 2) {
+      let reRanked = await reRankZonesWithGemma(toRank, rankImages, resolvedCityName)
+      // Safety net: drop any zone Gemma's reasoning flagged as water even if not marked UNSUITABLE
+      const WATER_RE = /\b(entirely water|mostly water|all water|open water|sea|ocean|bay|lake|pond|waterway|river)\b/i
+      const beforeWaterFilter = reRanked.length
+      reRanked = reRanked.filter(z => !WATER_RE.test(z.gemma_reasoning))
+      if (reRanked.length < beforeWaterFilter) {
+        console.log(`[ndvi] water post-filter: dropped ${beforeWaterFilter - reRanked.length} zone(s)`)
+      }
+      reRankedZones = [...reRanked, ...noTile].map((z, i) => ({ ...z, rank: i + 1 }))
+      satelliteImageUsed = reRanked !== toRank
+      console.log('[ndvi] P4b tiles fetched:', rankImages.length, 'satellite_image_used:', satelliteImageUsed)
+    }
+  }
 
-  const finalZones = zones.length > 0 ? zones : buildFallbackZones(districtName, barrenHa, bbox)
+  const finalZones = reRankedZones.length > 0
+    ? reRankedZones
+    : buildFallbackZones(districtName, barrenHa, bbox, containmentRing)
 
   const result: NDVIResult = {
     district:           districtName,
@@ -189,7 +335,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     parking_lots:       Math.round(builtPct * 0.4),
     plantation_score:   plantationScore,
     source:             patches.length > 0 ? 'gee' : 'fallback',
-    satellite_image_used: false,
+    satellite_image_used: satelliteImageUsed,
     verified_zones:     finalZones,
     grid_cells: validated.map(v => ({
       bbox: v.polygon.coordinates[0].reduce(
@@ -206,7 +352,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   serverCache.set(cacheKey, result)
-  return res.status(200).json(result)
+  writeChunk({ type: 'result', ...result })
+  res.end()
 }
 
 // ── MCDA scoring ──────────────────────────────────────────────────────────────
@@ -297,6 +444,102 @@ function buildZones(patches: ValidatedPatch[], config: CityConfig): VerifiedZone
     })
 }
 
+// ── Generic urban fallback ────────────────────────────────────────────────────
+
+const GENERIC_URBAN_BANDS: DWBandValues = {
+  trees: 0.10, grass: 0.05, bare: 0.08, built: 0.70, water: 0.02, shrub_and_scrub: 0.02,
+}
+
+function buildFallbackResult(districtName: string, bbox: [number, number, number, number], ring?: [number, number][] | null): NDVIResult {
+  const bands = GENERIC_URBAN_BANDS
+  const [minLon, minLat, maxLon, maxLat] = bbox
+  const builtPct = Math.round(bands.built * 100)
+  const canopyPct = Math.round((bands.trees + bands.shrub_and_scrub) * 100)
+  const greenCoverPct = Math.min(100, canopyPct + Math.round(bands.grass * 100))
+  const estimatedTempC = Math.round(28 + bands.built * 12 - bands.trees * 8)
+  const plantationScore = Math.round(Math.max(0, Math.min(100,
+    (bands.bare * 0.65 + (1 - (bands.trees + bands.grass + bands.shrub_and_scrub)) * 0.2 - bands.built * 0.15) * 100
+  )))
+  const avgLat = (minLat + maxLat) / 2
+  const districtHa = (maxLon - minLon) * 111320 * Math.cos(avgLat * Math.PI / 180) * (maxLat - minLat) * 110570 / 10_000
+  const barrenHa = Math.round(districtHa * bands.bare)
+
+  return {
+    district:           districtName,
+    ndvi_pct:           canopyPct,
+    green_cover_pct:    greenCoverPct,
+    estimated_temp_c:   estimatedTempC,
+    built_up_pct:       builtPct,
+    barren_ha:          barrenHa,
+    available_rooftops: Math.round(builtPct * 8.5),
+    road_km:            Math.round((bbox[2] - bbox[0]) * 111 * 4),
+    wall_count:         Math.round(builtPct * 3.1),
+    parking_lots:       Math.round(builtPct * 0.4),
+    plantation_score:   plantationScore,
+    source:             'fallback',
+    satellite_image_used: false,
+    verified_zones:     buildFallbackZones(districtName, barrenHa, bbox, ring),
+  }
+}
+
+function buildFallbackZones(
+  district: string,
+  barrenHa: number,
+  bbox: [number, number, number, number],
+  ring?: [number, number][] | null,
+): VerifiedZone[] {
+  const [minLon, minLat, maxLon, maxLat] = bbox
+  let cx = (minLon + maxLon) / 2
+  let cy = (minLat + maxLat) / 2
+
+  // Prefer polygon centroid over bbox centroid — bbox centroid can fall in water
+  // or outside a concave district boundary (e.g. Himalayan tehsils, coastal boroughs).
+  if (ring && ring.length >= 4) {
+    const n = ring.length
+    const rLon = ring.reduce((s, p) => s + p[0], 0) / n
+    const rLat = ring.reduce((s, p) => s + p[1], 0) / n
+    if (pointInPolygon(rLat, rLon, ring)) { cy = rLat; cx = rLon }
+  }
+
+  // All fallback zones share the same safe interior point — positions are
+  // estimated (no GEE data); fly-to is disabled for fallback results.
+  const zones: VerifiedZone[] = [
+    {
+      rank: 1, site_type: 'open_ground', plantable: true,
+      estimated_trees: Math.min(80_000, Math.round(barrenHa * 0.4 * 650)),
+      cooling_impact: `-${Math.min(2.5, barrenHa * 0.4 * 0.25).toFixed(1)}°C`,
+      gemma_reasoning: `Open municipal ground in ${district} — GEE unavailable, estimated zone`,
+      planting_method: 'ground planting',
+      lat: cy, lon: cx,
+    },
+    {
+      rank: 2, site_type: 'road_median', plantable: true,
+      estimated_trees: Math.min(25_000, Math.round(barrenHa * 0.3 * 200)),
+      cooling_impact: `-${Math.min(1.5, barrenHa * 0.3 * 0.25).toFixed(1)}°C`,
+      gemma_reasoning: 'Major road medians — avenue planting suitable',
+      planting_method: 'roadside pits',
+      lat: cy, lon: cx,
+    },
+    {
+      rank: 3, site_type: 'park', plantable: true,
+      estimated_trees: Math.min(50_000, Math.round(barrenHa * 0.2 * 400)),
+      cooling_impact: `-${Math.min(2.0, barrenHa * 0.2 * 0.25).toFixed(1)}°C`,
+      gemma_reasoning: 'Underutilised park or institutional ground',
+      planting_method: 'ground planting',
+      lat: cy, lon: cx,
+    },
+    {
+      rank: 4, site_type: 'parking_lot', plantable: true,
+      estimated_trees: Math.min(8_000, Math.round(barrenHa * 0.1 * 80)),
+      cooling_impact: `-${Math.min(0.8, barrenHa * 0.1 * 0.25).toFixed(1)}°C`,
+      gemma_reasoning: 'Parking lot perimeter — shade trees reduce surface heat',
+      planting_method: 'perimeter planting',
+      lat: cy, lon: cx,
+    },
+  ]
+  return zones.filter(z => z.estimated_trees > 0)
+}
+
 // ── Geometry helpers ──────────────────────────────────────────────────────────
 
 function ringAreaHa(ring: number[][]): number {
@@ -355,80 +598,5 @@ function deriveMetrics(
   }
 }
 
-// ── Fallback path (used when GEE is unreachable) ──────────────────────────────
-
-const DISTRICT_DW_BANDS: Record<string, DWBandValues> = {
-  'Central Delhi':    { trees: 0.04, grass: 0.02, bare: 0.07, built: 0.85, water: 0.01, shrub_and_scrub: 0.01 },
-  'East Delhi':       { trees: 0.08, grass: 0.03, bare: 0.08, built: 0.78, water: 0.01, shrub_and_scrub: 0.02 },
-  'New Delhi':        { trees: 0.30, grass: 0.15, bare: 0.05, built: 0.45, water: 0.02, shrub_and_scrub: 0.03 },
-  'North Delhi':      { trees: 0.18, grass: 0.08, bare: 0.10, built: 0.58, water: 0.04, shrub_and_scrub: 0.02 },
-  'North East Delhi': { trees: 0.06, grass: 0.02, bare: 0.08, built: 0.82, water: 0.01, shrub_and_scrub: 0.01 },
-  'North West Delhi': { trees: 0.20, grass: 0.10, bare: 0.10, built: 0.55, water: 0.02, shrub_and_scrub: 0.03 },
-  'Shahdara':         { trees: 0.07, grass: 0.03, bare: 0.09, built: 0.78, water: 0.02, shrub_and_scrub: 0.01 },
-  'South Delhi':      { trees: 0.24, grass: 0.09, bare: 0.07, built: 0.55, water: 0.01, shrub_and_scrub: 0.04 },
-  'South East Delhi': { trees: 0.12, grass: 0.05, bare: 0.08, built: 0.72, water: 0.01, shrub_and_scrub: 0.02 },
-  'South West Delhi': { trees: 0.16, grass: 0.08, bare: 0.12, built: 0.58, water: 0.02, shrub_and_scrub: 0.04 },
-  'West Delhi':       { trees: 0.15, grass: 0.06, bare: 0.09, built: 0.66, water: 0.01, shrub_and_scrub: 0.03 },
-}
-
-const DEFAULT_DW_BANDS: DWBandValues = { trees: 0.15, grass: 0.06, bare: 0.09, built: 0.66, water: 0.01, shrub_and_scrub: 0.03 }
-
-function getFallbackData(districtName: string): NDVIResult {
-  const bands = DISTRICT_DW_BANDS[districtName] ?? DEFAULT_DW_BANDS
-  const districtBbox = getBbox(districtName) ?? [77.0, 28.4, 77.3, 28.9] as [number, number, number, number]
-  return deriveMetrics(districtName, bands, [], districtBbox, 'fallback')
-}
-
-function buildFallbackResult(districtName: string, bbox: [number, number, number, number]): NDVIResult {
-  const base = getFallbackData(districtName)
-  const zones = buildFallbackZones(districtName, base.barren_ha, bbox)
-  return { ...base, verified_zones: zones, satellite_image_used: false }
-}
-
-function buildFallbackZones(
-  district: string,
-  barrenHa: number,
-  bbox: [number, number, number, number]
-): VerifiedZone[] {
-  const [minLon, minLat, maxLon, maxLat] = bbox
-  const cx = (minLon + maxLon) / 2
-  const cy = (minLat + maxLat) / 2
-  const dx = (maxLon - minLon) * 0.28
-  const dy = (maxLat - minLat) * 0.28
-
-  const zones: VerifiedZone[] = [
-    {
-      rank: 1, site_type: 'open_ground', plantable: true,
-      estimated_trees: Math.min(80_000, Math.round(barrenHa * 0.4 * 650)),
-      cooling_impact: `-${Math.min(2.5, barrenHa * 0.4 * 0.25).toFixed(1)}°C`,
-      gemma_reasoning: `Open municipal ground in ${district} — GEE unavailable, estimated zone`,
-      planting_method: 'ground planting',
-      lat: cy + dy, lon: cx - dx,
-    },
-    {
-      rank: 2, site_type: 'road_median', plantable: true,
-      estimated_trees: Math.min(25_000, Math.round(barrenHa * 0.3 * 200)),
-      cooling_impact: `-${Math.min(1.5, barrenHa * 0.3 * 0.25).toFixed(1)}°C`,
-      gemma_reasoning: 'Major road medians — avenue planting suitable',
-      planting_method: 'roadside pits',
-      lat: cy + dy, lon: cx + dx,
-    },
-    {
-      rank: 3, site_type: 'park', plantable: true,
-      estimated_trees: Math.min(50_000, Math.round(barrenHa * 0.2 * 400)),
-      cooling_impact: `-${Math.min(2.0, barrenHa * 0.2 * 0.25).toFixed(1)}°C`,
-      gemma_reasoning: 'Underutilised park or institutional ground',
-      planting_method: 'ground planting',
-      lat: cy - dy, lon: cx - dx,
-    },
-    {
-      rank: 4, site_type: 'parking_lot', plantable: true,
-      estimated_trees: Math.min(8_000, Math.round(barrenHa * 0.1 * 80)),
-      cooling_impact: `-${Math.min(0.8, barrenHa * 0.1 * 0.25).toFixed(1)}°C`,
-      gemma_reasoning: 'Parking lot perimeter — shade trees reduce surface heat',
-      planting_method: 'perimeter planting',
-      lat: cy - dy, lon: cx + dx,
-    },
-  ]
-  return zones.filter(z => z.estimated_trees > 0)
-}
+// Keep deriveMetrics in scope to avoid unused-variable warnings
+void deriveMetrics

@@ -30,3 +30,14 @@ html, body {
 .leaflet-control-zoom {
   margin-bottom: 8px !important;
 }
+
+/* Pipeline step spinner */
+@keyframes step-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Gemma analysis skeleton shimmer */
+@keyframes brief-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}

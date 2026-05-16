@@ -425,50 +425,55 @@ export async function fetchOpenGroundPatches(
   bbox: [number, number, number, number],
   token: string,
   config: CityConfig,
+  hotspotBboxes?: [number, number, number, number][],
 ): Promise<OpenPatch[]> {
-  const [minLon, minLat, maxLon, maxLat] = bbox
-  console.log('[gee] fetchOpenGroundPatches bbox:', bbox)
+  // Vectorise within each hotspot cell rather than the full district — hotspot cells are
+  // 1/16 the district area and run in parallel, avoiding GEE timeout on large districts.
+  const searchAreas = hotspotBboxes && hotspotBboxes.length > 0 ? hotspotBboxes : [bbox]
+  console.log('[gee] fetchOpenGroundPatches bbox:', bbox, 'search areas:', searchAreas.length)
 
+  const allPatches: OpenPatch[] = []
 
-  const expression = fn('Image.reduceToVectors', {
-    image: buildBareThresholdMask(config.bareThreshold),
-    scale: c(config.geeScale * 2),
-    geometry: buildPolygonNode([[[minLon, minLat], [maxLon, minLat], [maxLon, maxLat], [minLon, maxLat], [minLon, minLat]]]),
-    maxPixels: c(5e6),
-    bestEffort: c(true),
-    geometryType: c('polygon'),
-    eightConnected: c(false),
-    labelProperty: c(null),
-  })
+  await Promise.allSettled(searchAreas.map(async (areaBbox, areaIdx) => {
+    const [minLon, minLat, maxLon, maxLat] = areaBbox
+    const expression = fn('Image.reduceToVectors', {
+      image: buildBareThresholdMask(config.bareThreshold),
+      scale: c(config.geeScale * 2),
+      geometry: buildPolygonNode([[[minLon, minLat], [maxLon, minLat], [maxLon, maxLat], [minLon, maxLat], [minLon, minLat]]]),
+      maxPixels: c(5e6),
+      bestEffort: c(true),
+      geometryType: c('polygon'),
+      eightConnected: c(false),
+      labelProperty: c(null),
+    })
 
-  try {
-    const result = await geeCompute(token, expression) as { features?: Array<{ geometry: { type: string; coordinates: unknown[] } }> } | null
-    const features = result?.features ?? []
-    console.log('[gee] fetchOpenGroundPatches raw features:', features.length)
+    try {
+      const result = await geeCompute(token, expression) as { features?: Array<{ geometry: { type: string; coordinates: unknown[] } }> } | null
+      const features = result?.features ?? []
+      console.log(`[gee] fetchOpenGroundPatches area ${areaIdx + 1}: ${features.length} raw features`)
 
-    const patches: OpenPatch[] = []
-    for (let i = 0; i < features.length; i++) {
-      const f = features[i]
-      if (f.geometry?.type !== 'Polygon') continue
-      const ring = f.geometry.coordinates[0] as [number, number][]
-      if (!ring || ring.length < 4) continue
-      const areaHa = ringAreaHaFromCoords(ring)
-      if (areaHa < config.minPatchHa) continue
-      patches.push({
-        id: `patch_${i}`,
-        polygon: { type: 'Polygon' as const, coordinates: [ring] },
-        areaHa: parseFloat(areaHa.toFixed(2)),
-        centroid: ringCentroidFromCoords(ring),
-      })
+      for (let i = 0; i < features.length; i++) {
+        const f = features[i]
+        if (f.geometry?.type !== 'Polygon') continue
+        const ring = f.geometry.coordinates[0] as [number, number][]
+        if (!ring || ring.length < 4) continue
+        const areaHa = ringAreaHaFromCoords(ring)
+        if (areaHa < config.minPatchHa) continue
+        allPatches.push({
+          id: `patch_${areaIdx}_${i}`,
+          polygon: { type: 'Polygon' as const, coordinates: [ring] },
+          areaHa: parseFloat(areaHa.toFixed(2)),
+          centroid: ringCentroidFromCoords(ring),
+        })
+      }
+    } catch (err) {
+      console.error(`[gee] fetchOpenGroundPatches area ${areaIdx + 1} error:`, (err as Error).message)
     }
+  }))
 
-    patches.sort((a, b) => b.areaHa - a.areaHa)
-    console.log(`[gee] fetchOpenGroundPatches: ${patches.length} patches >= ${config.minPatchHa}ha`)
-    return patches
-  } catch (err) {
-    console.error('[gee] fetchOpenGroundPatches error:', (err as Error).message)
-    return []
-  }
+  allPatches.sort((a, b) => b.areaHa - a.areaHa)
+  console.log(`[gee] fetchOpenGroundPatches: ${allPatches.length} patches >= ${config.minPatchHa}ha`)
+  return allPatches
 }
 
 // ── Phase 3 — Per-polygon validation + naming ─────────────────────────────────
