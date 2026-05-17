@@ -1,0 +1,38 @@
+[
+  {
+    "site_id": "p4_30",
+    "final_rank": 2,
+    "plantable": true,
+    "species": [
+      {
+        "name": "Native species",
+        "why": "suitable for local climate"
+      }
+    ],
+    "planting_method": "ground planting",
+    "estimated_trees": 1743,
+    "temp_reduction_c": 0.3,
+    "carbon_10yr_tons": 43.6,
+    "people_impacted": 402,
+    "cost_estimate_inr": 784350,
+    "reasoning": "Agent 2 call failed \u2014 formula fallback"
+  },
+  {
+    "site_id": "p4_25",
+    "final_rank": 1,
+    "plantable": true,
+    "species": [
+      {
+        "name": "Native species",
+        "why": "suitable for local climate"
+      }
+    ],
+    "planting_method": "ground planting",
+    "estimated_trees": 3144,
+    "temp_reduction_c": 0.6,
+    "carbon_10yr_tons": 78.6,
+    "people_impacted": 726,
+    "cost_estimate_inr": 1414800,
+    "reasoning": "Agent 2 unavailable \u2014 formula estimate"
+  }
+]

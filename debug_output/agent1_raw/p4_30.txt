@@ -1,0 +1,63 @@
+*   Role: Urban Forest Site Critic for Richmond County, NY.
+    *   Task: Review candidate planting sites using MCDA score and satellite image.
+    *   MCDA Formula: `Score = canopy_deficit*0.35 + openness*0.30 + area_score*0.20 + site_type_bonus*0.15`.
+    *   Rejection Criteria:
+        *   Active construction, water body, ferry terminal, port/dock apron, pier, quay, marina, rooftop, airport/runway, highway surface.
+        *   Built fraction > 0.45.
+    *   Review Criteria: MCDA > 60 but fragmented/narrow shape.
+    *   Approval Criteria: Image confirms open/bare land matching band data.
+    *   Special Instruction for [UNKNOWN TYPE]: Infer site type from image.
+    *   Output: JSON array only.
+
+    *   Site ID: `p4_30`
+    *   MCDA Score: 81/100
+    *   Area: 3.8ha
+    *   Canopy: 10%
+    *   Bare: 14%
+    *   Built: 41%
+    *   Water: 10%
+    *   Trees: 4%
+    *   Grass: 4%
+    *   Type: [UNKNOWN TYPE]
+
+    *   The image shows a mix of urban elements.
+    *   Top right: Water body (river/harbor) and a dock/pier area.
+    *   Top center: Large industrial/commercial buildings with white roofs.
+    *   Right: A baseball field (green grass, dirt diamond).
+    *   Center/Left: A large, brownish, open area that looks like a vacant lot or brownfield.
+    *   Bottom: Residential/commercial blocks with buildings and parking lots.
+    *   The specific site `p4_30` likely corresponds to the large open brownish area in the center-left, as it matches the "bare" and "canopy deficit" descriptions and the area size (3.8ha is quite large).
+    *   Wait, looking closer at the image:
+        *   There's a large brown field in the center-left.
+        *   There's a baseball field on the right.
+        *   There are buildings and roads.
+    *   The "built" fraction is 41%. This is below the 0.45 threshold.
+    *   The "water" fraction is 10%. This suggests the site boundary might include a bit of the waterfront or a small pond, but the bulk is land.
+    *   The large brown area looks like a vacant lot or a brownfield.
+    *   Is it a "port/dock apron, pier, quay"? The top part of the image is definitely a port/dock area. If the site boundary includes that, it should be rejected. However, the large brown area is inland from the immediate dock edge.
+    *   Let's re-examine the "built" fraction (41%). If the site is the large brown area, the built fraction would be much lower. If the site encompasses the whole tile or a large chunk of it including the buildings, 41% makes sense.
+    *   Looking at the image, the large brown area is a prime candidate for planting. It's open, bare, and lacks canopy.
+    *   Inferred site type: Vacant lot / Brownfield.
+
+    *   Built fraction = 0.41 (<= 0.45).
+    *   Image shows a large open area (brownish) which is suitable for planting.
+    *   MCDA score is high (81).
+    *   No obvious "reject" triggers in the main open area (though the surrounding area has docks, the site itself seems to be the open land).
+    *   Verdict: Approve.
+    *   Adjusted score: The MCDA is 81. The visual confirms a large open space. I'll keep it around 81 or slightly adjust based on the "built" fraction being close to the limit. Let's stick with 81 as it's a very clear open space.
+
+    *   `site_id`: "p4_30"
+    *   `verdict`: "approve"
+    *   `mcda_score`: 81
+    *   `visual_confidence`: 0.9
+    *   `adjusted_score`: 81
+    *   `issues`: []
+    *   `positive_signals`: ["large open bare area", "low canopy cover", "below built fraction threshold"]
+    *   `reasoning`: "The image confirms a large vacant lot/brownfield area with significant open space and low canopy cover, matching the high MCDA score."
+    *   `inferred_site_type`: "vacant lot"
+
+    *   Wait, looking at the image again. The top part is a port. If the site boundary includes the port apron, it's a reject. But usually, these sites are polygons. Given the "built" fraction is 41% and "bare" is 14%, and there's a huge brown field, it's likely the brown field + some surrounding urban fabric.
+    *   The brown field is definitely plantable.
+    *   Let's double check the "built" fraction. 41% is quite high for just a vacant lot. It likely includes the surrounding buildings.
+    *   Is it a "port/dock apron"? The very top edge is. But the main area is a lot.
+    *   I will approve it as a vacant lot.

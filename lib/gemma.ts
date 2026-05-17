@@ -52,6 +52,10 @@ export async function callGemma(prompt: string, images?: GemmaImage[]): Promise<
 // Gemma 4 exposes chain-of-thought. Two extraction strategies:
 // 1. Pull text from "* *Paragraph N:* <prose>" lines (most reliable)
 // 2. Fall back to last 3 clean prose paragraphs
+export function sanitiseGemmaOutput(raw: string): string {
+  return extractFinalParagraphs(raw)
+}
+
 function extractFinalParagraphs(raw: string): string {
   // Strategy 1: lines matching "* *Paragraph N...*: <prose>" (may have leading spaces)
   const embedded = [...raw.matchAll(/^\s*\*\s+\*Paragraph\s+\d[^*]*\*:?\*?\s+(.+)$/gm)]
@@ -86,18 +90,97 @@ export interface VerifiedZone {
   lat: number
   lon: number
   place_name?: string
+  _species?: Array<{ name: string; why: string }>
+  _carbon_10yr?: number
+  _people_impacted?: number
+  _cost_inr?: number
+  _plantable_ha?: number
+  _mcda_score?: number
+}
+
+export interface PatchInput {
+  id: string
+  areaHa: number
+  centroid: { lat: number; lon: number }
+  placeName?: string
+  bands: { bare: number; built: number; trees: number; grass: number; shrub_and_scrub: number; water?: number }
+  canopyPct: number
+  siteType: string
+  mcdaScore?: number
+  ring?: [number, number][]
+}
+
+export interface AgentCritique {
+  site_id: string
+  verdict: 'approve' | 'review' | 'reject'
+  mcda_score: number
+  visual_confidence: number
+  adjusted_score: number
+  issues: string[]
+  positive_signals: string[]
+  reasoning: string
+  inferred_site_type?: string
+}
+
+export interface ValidationResult {
+  site_id: string
+  passed: boolean
+  compactness: number
+  override_reason?: string
+}
+
+export interface AgentPlan {
+  site_id: string
+  final_rank: number
+  plantable: boolean
+  species: Array<{ name: string; why: string }>
+  planting_method: string
+  estimated_trees: number
+  temp_reduction_c: number
+  carbon_10yr_tons: number
+  people_impacted: number
+  cost_estimate_inr: number
+  reasoning: string
 }
 
 export const SUPPORTED_LANGUAGES = [
-  { code: 'en', label: 'English',  nativeName: 'English'  },
-  { code: 'hi', label: 'Hindi',    nativeName: 'हिन्दी'    },
-  { code: 'bn', label: 'Bengali',  nativeName: 'বাংলা'    },
-  { code: 'ta', label: 'Tamil',    nativeName: 'தமிழ்'    },
-  { code: 'te', label: 'Telugu',   nativeName: 'తెలుగు'   },
-  { code: 'mr', label: 'Marathi',  nativeName: 'मराठी'    },
+  // Top global languages by speaker count
+  { code: 'en', label: 'English',    nativeName: 'English'         },
+  { code: 'zh', label: 'Mandarin',   nativeName: '中文'             },
+  { code: 'es', label: 'Spanish',    nativeName: 'Español'         },
+  { code: 'hi', label: 'Hindi',      nativeName: 'हिन्दी'           },
+  { code: 'ar', label: 'Arabic',     nativeName: 'العربية'         },
+  { code: 'fr', label: 'French',     nativeName: 'Français'        },
+  { code: 'pt', label: 'Portuguese', nativeName: 'Português'       },
+  { code: 'bn', label: 'Bengali',    nativeName: 'বাংলা'           },
+  { code: 'ru', label: 'Russian',    nativeName: 'Русский'         },
+  { code: 'id', label: 'Indonesian', nativeName: 'Bahasa Indonesia'},
+  { code: 'ja', label: 'Japanese',   nativeName: '日本語'           },
+  { code: 'de', label: 'German',     nativeName: 'Deutsch'         },
+  { code: 'ur', label: 'Urdu',       nativeName: 'اردو'            },
+  { code: 'sw', label: 'Swahili',    nativeName: 'Kiswahili'       },
+  { code: 'ta', label: 'Tamil',      nativeName: 'தமிழ்'           },
+  { code: 'te', label: 'Telugu',     nativeName: 'తెలుగు'          },
+  { code: 'mr', label: 'Marathi',    nativeName: 'मराठी'           },
 ] as const
 
 export type LangCode = typeof SUPPORTED_LANGUAGES[number]['code']
+
+// Strips Gemma 4 chain-of-thought from translation output.
+// Model outputs "* "original" -> translation" lines — keep only the translation side.
+function stripTranslationCoT(raw: string): string {
+  const lines = raw.split('\n')
+  const out: string[] = []
+  for (const line of lines) {
+    const t = line.trim()
+    if (!t || t === '`' || t === '* `' || t === '* \`') continue
+    // Arrow pattern: * "original sentence" -> translated sentence
+    const arrow = t.match(/^[*\-•]?\s*"[^"]*"\s*-+>\s*(.+)$/)
+    if (arrow) { out.push(arrow[1].trim()); continue }
+    out.push(line)
+  }
+  return out.join('\n').trim()
+}
 
 export async function translateForReport(
   text: string,
@@ -108,27 +191,32 @@ export async function translateForReport(
 
   const langName = SUPPORTED_LANGUAGES.find(l => l.code === targetLang)?.label ?? targetLang
 
-  const prompt = `Translate the following urban forestry policy brief text into ${langName}.
-Preserve all numbers, percentages, and technical terms exactly as they are.
-Return ONLY the translated text — no explanation, no notes.
+  const prompt = `You are a professional translator. Translate the text below into ${langName}.
 
-Text to translate:
+Rules:
+- Preserve every [TAG] and [/TAG] marker exactly — do not translate or modify tags.
+- Only translate the text between matching open/close tags.
+- Preserve all numbers, percentages, units (%, deg C, ha, km) and proper nouns exactly.
+- Output ONLY the translated tagged text. No thinking, no explanations, no "original -> translation" lines.
+
+Text:
 ${text}`
 
   try {
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemma-2-9b-it:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.1, maxOutputTokens: 800 }
+          generationConfig: { temperature: 0.1, maxOutputTokens: 4096 }
         })
       }
     )
     const data = await res.json()
-    return data?.candidates?.[0]?.content?.parts?.[0]?.text ?? text
+    const raw: string = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+    return stripTranslationCoT(raw) || text
   } catch {
     return text
   }
@@ -250,6 +338,13 @@ UNSUITABLE: Site N — one sentence explaining why planting is not possible here
   }
 }
 
+const LANGUAGE_NAMES: Record<string, string> = {
+  zh: 'Chinese (Simplified)', es: 'Spanish', hi: 'Hindi', ar: 'Arabic',
+  fr: 'French', pt: 'Portuguese', bn: 'Bengali', ru: 'Russian',
+  id: 'Indonesian', ja: 'Japanese', de: 'German', ur: 'Urdu',
+  sw: 'Swahili', ta: 'Tamil', te: 'Telugu', mr: 'Marathi',
+}
+
 export function buildPrompt(params: {
   district: string
   cityName?: string
@@ -259,8 +354,13 @@ export function buildPrompt(params: {
   built_up_pct: number
   barren_ha: number
   zones?: VerifiedZone[]
+  language?: string
 }): { prompt: string; hasLand: boolean } {
-  const { district, cityName, ndvi_pct, green_cover_pct, estimated_temp_c, built_up_pct, barren_ha, zones } = params
+  const { district, cityName, ndvi_pct, green_cover_pct, estimated_temp_c, built_up_pct, barren_ha, zones, language } = params
+  const langName = language && language !== 'en' ? (LANGUAGE_NAMES[language] ?? language) : null
+  const languageInstruction = langName
+    ? `CRITICAL: Write your ENTIRE response in ${langName}. All paragraphs must be in ${langName}. Do not mix languages. Do not use English at all.\n\n`
+    : ''
   const hasLand = barren_ha > 2
 
   const zoneBlock = zones && zones.length > 0
@@ -280,7 +380,7 @@ export function buildPrompt(params: {
     ? `\nSatellite imagery of the top ${Math.min(zones.length, 3)} planting sites is attached above (one tile per site, in the same order as the site list). Use what you observe in these images to add specific visual detail to your priority action paragraph.\n`
     : ''
 
-  const prompt = `You are an urban forestry AI analyst preparing a government policy brief.
+  const prompt = `${languageInstruction}You are an urban forestry AI analyst preparing a government policy brief.
 ${imageNote}
 District: ${district}${cityName ? `, ${cityName}` : ''}
 NDVI score: ${ndvi_pct}% (vegetation index from Sentinel-2 satellite)
@@ -304,4 +404,284 @@ Paragraph 3 (2-3 sentences): Priority action — what should government or NGO d
 Professional policy language. No bullet points. No headers. No asterisks. Plain prose only.`
 
   return { prompt, hasLand }
+}
+
+// Extracts a JSON array from Gemma output that may have chain-of-thought before/after.
+// Gemma 4 puts CoT first then the JSON; the array is always the LAST well-formed JSON
+// structure in the output. We scan backward from the last ']', tracking bracket depth
+// to find its matching '[', then parse that slice.
+function extractJsonArray<T>(text: string): T[] | null {
+  const clean = text.trim().replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim()
+
+  // Fast path: whole text is already valid JSON array (no CoT)
+  try {
+    const p = JSON.parse(clean)
+    if (Array.isArray(p) && p.length > 0) return p as T[]
+  } catch { /* fall through */ }
+
+  // Scan backward from each ']' and find its matching '[', try to parse the slice
+  let end = clean.lastIndexOf(']')
+  while (end >= 0) {
+    let depth = 0
+    let inStr = false
+    let esc   = false
+    let start = -1
+
+    for (let i = end; i >= 0; i--) {
+      const c = clean[i]
+      if (esc) { esc = false; continue }
+      if (c === '\\' && inStr) { esc = true; continue }
+      if (c === '"') { inStr = !inStr; continue }
+      if (inStr) continue
+      if (c === ']' || c === '}') depth++
+      else if (c === '{') depth--
+      else if (c === '[') {
+        depth--
+        if (depth === 0) { start = i; break }
+      }
+    }
+
+    if (start !== -1) {
+      try {
+        const p = JSON.parse(clean.slice(start, end + 1))
+        if (Array.isArray(p) && p.length > 0) return p as T[]
+      } catch { /* try previous ']' */ }
+    }
+
+    end = clean.lastIndexOf(']', end - 1)
+  }
+
+  return null
+}
+
+// ── Agent 1 — Gemma Critic ────────────────────────────────────────────────────
+
+export async function runAgentCritic(
+  patches: PatchInput[],
+  images: GemmaImage[],
+  district: string,
+  cityName: string,
+): Promise<AgentCritique[]> {
+  if (patches.length === 0) return []
+
+  const siteList = patches.map((p, i) =>
+    `Site ${i + 1} (id: ${p.id}): ${p.siteType === 'unknown' ? '[UNKNOWN TYPE — infer from image]' : (p.placeName ?? p.siteType)} — ` +
+    `MCDA: ${p.mcdaScore ?? '?'}/100, area: ${p.areaHa.toFixed(1)}ha, canopy: ${p.canopyPct}%, ` +
+    `bare: ${Math.round(p.bands.bare * 100)}%, built: ${Math.round(p.bands.built * 100)}%, ` +
+    `water: ${Math.round((p.bands.water ?? 0) * 100)}%, ` +
+    `trees: ${Math.round(p.bands.trees * 100)}%, grass: ${Math.round(p.bands.grass * 100)}%`
+  ).join('\n')
+
+  const prompt = `You are Agent 1 — Urban Forest Site Critic for ${district}, ${cityName}.
+
+Your job: Review each candidate planting site using BOTH the MCDA score AND the satellite image.
+The MCDA score is computed from satellite band data. Your visual inspection may confirm or override it.
+
+MCDA Formula:
+  Score = canopy_deficit×0.35 + openness×0.30 + area_score×0.20 + site_type_bonus×0.15
+  100 = ideal planting site. 0 = completely unsuitable.
+
+Satellite tiles are attached above — one per site in the same order as the list below.
+
+Sites to evaluate:
+${siteList}
+
+RULES:
+- REJECT if image shows: active construction, water body, ferry terminal, port/dock apron, pier, quay, marina, rooftop, airport/runway, highway surface
+- REJECT if built fraction > 0.45 (dense urban fabric, not plantable)
+- REVIEW if MCDA > 60 but image shows fragmented or narrow shape
+- APPROVE if image confirms open/bare land matching the band data
+- Your adjusted_score should reflect both the formula AND what you see
+
+For sites marked [UNKNOWN TYPE — infer from image]:
+  Look at the surrounding context in the satellite tile — nearby roads, buildings, vegetation patches, fences, lot boundaries.
+  Deduce the most likely land use (vacant lot, road median, parking area, brownfield, etc.) and set inferred_site_type accordingly.
+  Use that inferred type to decide verdict and adjusted_score, not the "unknown" label.
+
+Return ONLY a valid JSON array. No prose, no markdown fences.
+Each element must have exactly these keys:
+{"site_id":"<id string>","verdict":"approve"|"review"|"reject","mcda_score":<number>,"visual_confidence":<0-1>,"adjusted_score":<0-100>,"issues":["..."],"positive_signals":["..."],"reasoning":"<one sentence>","inferred_site_type":"<only for unknown sites, else omit>"}`
+
+  const imageParts = images.map(img => ({ inlineData: { mimeType: img.mimeType, data: img.base64 } }))
+  const body = JSON.stringify({
+    contents: [{ parts: [...imageParts, { text: prompt }] }],
+    generationConfig: { temperature: 0.1, maxOutputTokens: 4096 },
+  })
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const res = await fetch(`${GEMMA_URL}?key=${process.env.GEMMA_API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    })
+    const data = await res.json()
+    if (res.status === 500 && attempt < 3) {
+      await new Promise(r => setTimeout(r, attempt * 1500))
+      continue
+    }
+    if (!res.ok) throw new Error(`Gemma API error ${res.status}: ${JSON.stringify(data)}`)
+    const text: string | undefined = data?.candidates?.[0]?.content?.parts?.[0]?.text
+    if (!text) throw new Error('Empty Gemma response')
+
+    const parsed = extractJsonArray<AgentCritique>(text)
+    if (parsed) return parsed
+    console.warn('[gemma] Agent 1 JSON extraction failed, raw:\n', text.slice(0, 600))
+    break
+  }
+
+  return patches.map(p => ({
+    site_id: p.id,
+    verdict: 'approve' as const,
+    mcda_score: p.mcdaScore ?? 50,
+    visual_confidence: 0.5,
+    adjusted_score: p.mcdaScore ?? 50,
+    issues: [],
+    positive_signals: [],
+    reasoning: 'Agent 1 parsing failed — defaulting to approve',
+  }))
+}
+
+// ── Spatial Validator (pure TypeScript) ───────────────────────────────────────
+
+function computeCompactness(ring: [number, number][]): number {
+  if (ring.length < 4) return 0.5
+  let area = 0
+  for (let i = 0; i < ring.length - 1; i++) {
+    area += ring[i][0] * ring[i + 1][1] - ring[i + 1][0] * ring[i][1]
+  }
+  area = Math.abs(area) / 2
+  let perimeter = 0
+  for (let i = 0; i < ring.length - 1; i++) {
+    const dx = ring[i + 1][0] - ring[i][0]
+    const dy = ring[i + 1][1] - ring[i][1]
+    perimeter += Math.sqrt(dx * dx + dy * dy)
+  }
+  if (perimeter === 0) return 0
+  return (4 * Math.PI * area) / (perimeter * perimeter)
+}
+
+export function runSpatialValidator(
+  patches: PatchInput[],
+  critiques: AgentCritique[],
+): ValidationResult[] {
+  return patches.map(p => {
+    const critique = critiques.find(c => c.site_id === p.id)
+    const verdict = critique?.verdict ?? 'approve'
+    const adjustedScore = critique?.adjusted_score ?? 50
+    const compactness = p.ring ? computeCompactness(p.ring) : 0.5
+
+    let passed: boolean
+    let override_reason: string | undefined
+
+    if (verdict === 'reject') {
+      passed = false
+    } else if (verdict === 'approve' && compactness < 0.10) {
+      passed = false
+      override_reason = 'shape too fragmented'
+    } else if (verdict === 'review' && adjustedScore > 50 && compactness >= 0.10) {
+      passed = true
+    } else if (verdict === 'review' && adjustedScore <= 50) {
+      passed = false
+    } else {
+      passed = true
+    }
+
+    console.log(
+      `[validator] site ${p.id}: verdict=${verdict} compactness=${compactness.toFixed(3)} passed=${passed}` +
+      (override_reason ? ` override=${override_reason}` : '')
+    )
+
+    return { site_id: p.id, passed, compactness, ...(override_reason ? { override_reason } : {}) }
+  })
+}
+
+// ── Agent 2 — Gemma Planner ───────────────────────────────────────────────────
+
+
+export async function runAgentPlanner(
+  patches: PatchInput[],
+  critiques: AgentCritique[],
+  validations: ValidationResult[],
+  images: GemmaImage[],
+  district: string,
+  cityName: string,
+  language?: string,
+): Promise<AgentPlan[]> {
+  const approved = patches.filter(p => validations.find(v => v.site_id === p.id)?.passed === true)
+  if (approved.length === 0) return []
+
+  const n = approved.length
+  const langName = language && language !== 'en' ? (LANGUAGE_NAMES[language] ?? language) : null
+  const langInstruction = langName
+    ? `CRITICAL: Respond entirely in ${langName}. Species names should use common ${langName} names where they exist, with Latin names in parentheses. The "reasoning" field must also be in ${langName}.\n\n`
+    : ''
+
+  const siteList = approved.map((p, i) => {
+    const critique = critiques.find(c => c.site_id === p.id)
+    const plantableHa = Math.min(p.areaHa * 0.70, 40)
+    return (
+      `Site ${i + 1} (id: ${p.id}): ${p.placeName ?? p.siteType} — ` +
+      `${p.areaHa.toFixed(1)}ha total, ~${plantableHa.toFixed(1)}ha plantable, ` +
+      `Agent 1: "${critique?.reasoning ?? 'approved'}", adjusted_score: ${critique?.adjusted_score ?? p.mcdaScore ?? 50}` +
+      (critique?.issues?.length ? `, issues: ${critique.issues.join(', ')}` : '') +
+      (critique?.positive_signals?.length ? `, positives: ${critique.positive_signals.join(', ')}` : '')
+    )
+  }).join('\n')
+
+  const prompt = `${langInstruction}Urban Forest Planner for ${district}, ${cityName}. Satellite images of ${n} approved planting sites are attached.
+
+Sites:
+${siteList}
+
+For each site output one JSON object. Species must be native/suitable to ${cityName}'s actual climate zone — use your knowledge of local flora.
+
+Formulas: estimated_trees=plantableHa*650(max 25000), temp_reduction_c=plantableHa*0.12(max 2.5), carbon_10yr_tons=estimated_trees*0.025, people_impacted=plantableHa*150, cost_estimate_inr=estimated_trees*450.
+
+Output a JSON array only — no text before or after:
+[{"site_id":"...","final_rank":1,"plantable":true,"species":[{"name":"...","why":"..."},{"name":"...","why":"..."}],"planting_method":"...","estimated_trees":0,"temp_reduction_c":0,"carbon_10yr_tons":0,"people_impacted":0,"cost_estimate_inr":0,"reasoning":"..."}]`
+
+  const imageParts = images.map(img => ({ inlineData: { mimeType: img.mimeType, data: img.base64 } }))
+  const body = JSON.stringify({
+    contents: [{ parts: [...imageParts, { text: prompt }] }],
+    generationConfig: { temperature: 0.2, maxOutputTokens: 4096, responseMimeType: 'application/json' },
+  })
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const res = await fetch(`${GEMMA_URL}?key=${process.env.GEMMA_API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    })
+    const data = await res.json()
+    if (res.status === 500 && attempt < 3) {
+      await new Promise(r => setTimeout(r, attempt * 1500))
+      continue
+    }
+    if (!res.ok) throw new Error(`Gemma API error ${res.status}: ${JSON.stringify(data)}`)
+    const text: string | undefined = data?.candidates?.[0]?.content?.parts?.[0]?.text
+    if (!text) throw new Error('Empty Gemma response')
+
+    const parsed = extractJsonArray<AgentPlan>(text)
+    if (parsed) return parsed
+    console.warn('[gemma] Agent 2 JSON extraction failed, raw:\n', text.slice(0, 600))
+    break
+  }
+
+  return approved.map((p, i) => {
+    const plantableHa = Math.min(p.areaHa * 0.70, 40)
+    const trees = Math.min(25000, Math.round(plantableHa * 650))
+    return {
+      site_id: p.id,
+      final_rank: i + 1,
+      plantable: true,
+      species: [{ name: 'Native species', why: 'suitable for local climate' }],
+      planting_method: 'ground planting',
+      estimated_trees: trees,
+      temp_reduction_c: parseFloat(Math.min(2.5, plantableHa * 0.12).toFixed(1)),
+      carbon_10yr_tons: parseFloat((trees * 0.025).toFixed(1)),
+      people_impacted: Math.round(plantableHa * 150),
+      cost_estimate_inr: trees * 450,
+      reasoning: 'Agent 2 unavailable — using formula estimates',
+    }
+  })
 }

@@ -397,11 +397,11 @@ export async function fetchHotspots(
   bbox: [number, number, number, number],
   token: string,
   config: CityConfig,
-): Promise<HotspotZone[]> {
+): Promise<{ hotspots: HotspotZone[]; reserve: HotspotZone[] }> {
   const cells = await fetchDWGrid(bbox, token, 4, 4)
   console.log('[gee] fetchHotspots: coarse cells returned:', cells.length)
 
-  return cells
+  const sorted = cells
     .map(cell => ({
       bbox: cell.cellBbox,
       canopyDeficit: parseFloat(Math.max(0, config.targetCanopyPct - cell.bands.trees - cell.bands.shrub_and_scrub).toFixed(3)),
@@ -409,7 +409,8 @@ export async function fetchHotspots(
       avgBuilt: parseFloat(cell.bands.built.toFixed(3)),
     }))
     .sort((a, b) => b.canopyDeficit - a.canopyDeficit)
-    .slice(0, 3)
+
+  return { hotspots: sorted.slice(0, 8), reserve: sorted.slice(8) }
 }
 
 // ── Phase 2 — Open ground polygon discovery ───────────────────────────────────
@@ -483,7 +484,11 @@ export type SiteType =
   | 'degraded_scrub'
   | 'vacant_land'
   | 'scrubland'
-  | 'low_canopy'
+  | 'urban_forest'
+  | 'roadside_corridor'
+  | 'green_roof_candidate'
+  | 'dense_urban'
+  | 'water_edge'
   | 'mixed_open'
   | 'unknown'
 
@@ -540,15 +545,18 @@ export async function validatePatches(
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
 function inferSiteType(bands: DWBandValues): SiteType {
-  const { trees, grass, bare, shrub_and_scrub, built, water } = bands
-  // Riverbeds, dense hardscape, and high-urban-mix areas are not plantable
-  if (water > 0.12 || built > 0.38) return 'unknown'
-  if (grass > 0.25) return 'park_or_green'
-  if (bare > 0.20 && shrub_and_scrub > 0.10) return 'degraded_scrub'
-  // Raised built threshold: urban areas have ~0.3 built even in open plots
-  if (bare > 0.20 && built < 0.35) return 'vacant_land'
+  const { trees, bare, shrub_and_scrub, built, water } = bands
+  const canopy = trees + shrub_and_scrub
+
+  if (water > 0.35) return 'water_edge'
+  if (canopy > 0.45) return 'park_or_green'
+  if (bare > 0.20 && shrub_and_scrub > 0.12) return 'degraded_scrub'
+  if (bare > 0.25 && built < 0.35) return 'vacant_land'
+  if (built > 0.60) return 'green_roof_candidate'
+  if (built > 0.35 && bare > 0.10 && canopy < 0.15) return 'roadside_corridor'
   if (shrub_and_scrub > 0.20) return 'scrubland'
-  if (trees > 0.15) return 'low_canopy'
+  if (canopy > 0.10 && built < 0.45) return 'urban_forest'
+  if (built > 0.45) return 'dense_urban'
   return 'mixed_open'
 }
 

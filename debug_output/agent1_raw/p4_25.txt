@@ -1,0 +1,33 @@
+*   Role: Urban Forest Site Critic for Richmond County, NY.
+    *   Task: Review candidate planting sites using MCDA score and satellite image.
+    *   Site 1 (p4_25):
+        *   MCDA: 100/100.
+        *   Area: 6.9ha.
+        *   Composition: canopy 10%, bare 17%, built 37%, water 11%, trees 4%, grass 4%.
+    *   Rejection Criteria: Active construction, water body, ferry terminal, port/dock apron, pier, quay, marina, rooftop, airport/runway, highway surface.
+    *   Rejection Criteria: Built fraction > 0.45.
+    *   Review Criteria: MCDA > 60 but fragmented/narrow.
+    *   Approval Criteria: Image confirms open/bare land.
+
+    *   The image shows a coastal area.
+    *   There is a large body of water on the right.
+    *   There are multiple railway tracks running parallel to the coast.
+    *   Between the railway tracks and the water, there is a large, flat, greyish-brown area.
+    *   This area looks like a port apron, dock, or industrial waterfront zone.
+    *   There are some structures and what looks like a road/pathway along the water's edge.
+    *   The area is clearly part of a port/industrial waterfront infrastructure.
+
+    *   The site is located right next to the water and railway.
+    *   The large open area is a port/dock apron or quay.
+    *   Rule: "REJECT if image shows: ... port/dock apron, pier, quay...".
+    *   The visual evidence strongly suggests this is a port/industrial area, not a suitable urban forest planting site.
+    *   Even though the MCDA score is 100, the visual inspection overrides it.
+
+    *   `site_id`: "p4_25"
+    *   `verdict`: "reject"
+    *   `mcda_score`: 100
+    *   `visual_confidence`: 1.0 (very clear it's a port/industrial area)
+    *   `adjusted_score`: 0 (completely unsuitable due to land use)
+    *   `issues`: ["port/dock apron", "industrial waterfront", "railway proximity"]
+    *   `positive_signals`: ["large open area"]
+    *   `reasoning`: "The site is a port/dock apron and industrial waterfront area adjacent to railway tracks, which is explicitly listed as a rejection criterion."

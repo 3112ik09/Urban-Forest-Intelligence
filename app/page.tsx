@@ -10,6 +10,7 @@ import {
   geocodeCity, fetchCityDistricts, getCityBoundaryGeoJSON,
   type GeocodedCity, type CityDistrict,
 } from '@/lib/geocoding'
+import { type LangCode } from '@/lib/gemma'
 
 // Leaflet must be client-side only
 const CityMap = dynamic(() => import('@/components/CityMap'), { ssr: false })
@@ -31,8 +32,15 @@ export default function Home() {
   const [loadingStep, setLoadingStep] = useState(0)
   const [ndviData, setNdviData] = useState<Record<string, number>>({})
   const [analysisResult, setAnalysisResult] = useState<FullResult | null>(null)
+  const [analysisError, setAnalysisError] = useState<string | null>(null)
   const [partialNdvi, setPartialNdvi] = useState<NDVIResult | null>(null)
   const [zoneActive, setZoneActive] = useState(false)
+  const [imagesCurrent, setImagesCurrent] = useState(0)
+  const [imagesTotal, setImagesTotal] = useState(0)
+  const [estimatedSecsRemaining, setEstimatedSecsRemaining] = useState(59)
+
+  const [reportLanguage, setReportLanguage] = useState<LangCode>('en')
+  const reportLanguageRef = useRef<LangCode>('en')
 
   const mapRef = useRef<LeafletMap | null>(null)
   const zoneMarkerRef = useRef<Marker | null>(null)
@@ -103,6 +111,11 @@ export default function Home() {
     }
   }, [cityInput])
 
+  const handleSetLanguage = useCallback((lang: LangCode) => {
+    reportLanguageRef.current = lang
+    setReportLanguage(lang)
+  }, [])
+
   // ── Zone click → fly map to zone ─────────────────────────────────────────
   const handleZoneClick = useCallback(async (zone: VerifiedZone) => {
     if (!mapRef.current) return
@@ -155,6 +168,9 @@ export default function Home() {
     setSelectedDistrict(districtName)
     setZoneActive(false)
     setPartialNdvi(null)
+    setImagesCurrent(0)
+    setImagesTotal(0)
+    setEstimatedSecsRemaining(59)
 
     // Return instantly from session cache
     const cacheKey = `${city?.osmId ?? 'local'}:${districtName}`
@@ -169,6 +185,7 @@ export default function Home() {
     setLoading(true)
     setLoadingStep(1)
     setAnalysisResult(null)
+    setAnalysisError(null)
 
     // Advance through steps during the long ndvi call (steps 1-4 are simulated)
     stepTimers.current = [
@@ -186,6 +203,7 @@ export default function Home() {
           bbox,
           districtPolygon: district.polygon,
           cityName: city?.displayName.split(',')[0].trim() ?? districtName,
+          language: reportLanguageRef.current,
         }),
         signal: ctrl.signal,
       })
@@ -206,22 +224,43 @@ export default function Home() {
         for (const rawLine of lines) {
           const line = rawLine.trim()
           if (!line) continue
-          const chunk = JSON.parse(line) as { type: string } & NDVIResult
+          const chunk = JSON.parse(line) as {
+            type: string; reason?: string
+            current?: number; total?: number
+            step?: number; stepLabel?: string; estimatedSecondsRemaining?: number
+          } & NDVIResult
 
-          if (chunk.type === 'stats') {
+          if (chunk.type === 'error') {
+            stepTimers.current.forEach(clearTimeout)
+            stepTimers.current = []
+            setAnalysisError(chunk.reason ?? 'Analysis failed — please try again.')
+            setLoading(false)
+            setLoadingStep(0)
+            return
+          } else if (chunk.type === 'step_change') {
+            setLoadingStep(s => Math.max(s, chunk.step ?? 0))
+            if (chunk.estimatedSecondsRemaining != null) {
+              setEstimatedSecsRemaining(chunk.estimatedSecondsRemaining)
+            }
+          } else if (chunk.type === 'image_progress') {
+            setImagesCurrent(chunk.current ?? 0)
+            setImagesTotal(chunk.total ?? 0)
+            setLoadingStep(s => Math.max(s, 4))
+          } else if (chunk.type === 'stats') {
             stepTimers.current.forEach(clearTimeout)
             stepTimers.current = [
               setTimeout(() => setLoadingStep(s => Math.max(s, 4)), 6000),
             ]
             setPartialNdvi(chunk)
-            setLoadingStep(3)
+            setLoadingStep(s => Math.max(s, 3))
           } else if (chunk.type === 'result') {
             stepTimers.current.forEach(clearTimeout)
             stepTimers.current = []
             ndviJson = chunk
             setPartialNdvi(chunk)
             setNdviData(prev => ({ ...prev, [districtName]: chunk.green_cover_pct }))
-            setLoadingStep(5)
+            // Use Math.max so a backend step_change(7) before result is not overwritten
+            setLoadingStep(s => Math.max(s, 5))
           }
         }
         if (done) break
@@ -235,6 +274,7 @@ export default function Home() {
         body: JSON.stringify({
           ...ndviJson,
           cityName: city?.displayName.split(',')[0].trim() ?? districtName,
+          language: reportLanguageRef.current,
         }),
         signal: ctrl.signal,
       })
@@ -340,8 +380,14 @@ export default function Home() {
           loadingStep={loadingStep}
           result={analysisResult}
           partialResult={partialNdvi}
+          error={analysisError}
           onZoneClick={handleZoneClick}
           cityName={currentCity?.displayName.split(',')[0].trim()}
+          imagesCurrent={imagesCurrent}
+          imagesTotal={imagesTotal}
+          estimatedSecsRemaining={estimatedSecsRemaining}
+          language={reportLanguage}
+          onLanguageChange={handleSetLanguage}
         />
       </div>
     </main>

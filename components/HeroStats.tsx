@@ -36,7 +36,7 @@ export default function HeroStats({ ndviData, cityName, totalDistricts }: Props)
       {/* Stats */}
       <div style={{ marginLeft: 'auto', display: 'flex', gap: '32px' }}>
         {[
-          { label: 'Avg heat difference', value: '+5.8°C', sub: 'low vs high canopy zones' },
+          { label: 'Heat gap: low vs high canopy', value: '+5.8°C', sub: 'urban heat island effect' },
           { label: 'Districts analysed',  value: String(analysed), sub: districtSub },
           { label: 'Critical heat zones', value: String(hotZones), sub: 'canopy < 15%' },
         ].map(s => (

@@ -1,0 +1,22 @@
+[
+  {
+    "site_id": "p4_25",
+    "verdict": "approve",
+    "mcda_score": 100,
+    "visual_confidence": 0.5,
+    "adjusted_score": 100,
+    "issues": [],
+    "positive_signals": [],
+    "reasoning": "Agent 1 parsing failed \u2014 defaulting to approve"
+  },
+  {
+    "site_id": "p4_30",
+    "verdict": "approve",
+    "mcda_score": 81,
+    "visual_confidence": 0.5,
+    "adjusted_score": 81,
+    "issues": [],
+    "positive_signals": [],
+    "reasoning": "Agent 1 parsing failed \u2014 defaulting to approve"
+  }
+]

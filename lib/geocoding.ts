@@ -76,31 +76,66 @@ function getOverride(cityName: string): CityConfig | null {
 
 // ── Geocode ───────────────────────────────────────────────────────────────────
 
+// OSM classes that are never a city — reject these to avoid streets/roads/etc.
+const NON_PLACE_CLASSES = new Set(['highway', 'waterway', 'natural', 'landuse', 'amenity', 'railway', 'building'])
+
+function pickBestCandidate(candidates: Record<string, unknown>[]): Record<string, unknown> | null {
+  if (!candidates.length) return null
+  // Prefer: relation > node > way; prefer class=place; reject non-place classes
+  const ranked = [...candidates].sort((a, b) => {
+    const aIsPlace = a.class === 'place' ? 0 : 1
+    const bIsPlace = b.class === 'place' ? 0 : 1
+    const osmOrder: Record<string, number> = { relation: 0, node: 1, way: 2 }
+    const aOsm = osmOrder[a.osm_type as string] ?? 3
+    const bOsm = osmOrder[b.osm_type as string] ?? 3
+    return (aIsPlace - bIsPlace) || (aOsm - bOsm)
+  })
+  // Return first candidate that isn't a road/waterway/etc.
+  return ranked.find(c => !NON_PLACE_CLASSES.has(c.class as string)) ?? ranked[0]
+}
+
 export async function geocodeCity(cityName: string): Promise<GeocodedCity | null> {
   try {
     const override = getOverride(cityName)
-    const url = override
-      ? `https://nominatim.openstreetmap.org/lookup?osm_ids=${override.osmType}${override.osmId}&format=json&addressdetails=1&polygon_geojson=1`
-      : `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cityName)}&format=json&limit=1&addressdetails=1&polygon_geojson=1`
 
-    const res = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(10_000) })
-    if (!res.ok) return null
-    const data = await res.json()
-    const item = Array.isArray(data) ? data[0] : data
+    let item: Record<string, unknown> | null = null
+
+    if (override) {
+      const url = `https://nominatim.openstreetmap.org/lookup?osm_ids=${override.osmType}${override.osmId}&format=json&addressdetails=1&polygon_geojson=1`
+      const res = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(10_000) })
+      if (!res.ok) return null
+      const data = await res.json()
+      item = Array.isArray(data) ? data[0] : data
+    } else {
+      // featuretype=settlement restricts Nominatim to cities/towns/villages — prevents streets from matching
+      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cityName)}&format=json&limit=5&addressdetails=1&polygon_geojson=1&featuretype=settlement`
+      const res = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(10_000) })
+      if (!res.ok) return null
+      const candidates = await res.json() as Record<string, unknown>[]
+      item = pickBestCandidate(Array.isArray(candidates) ? candidates : [])
+
+      // Hard guard: if the top result is still a non-place class, bail
+      if (item && NON_PLACE_CLASSES.has(item.class as string)) {
+        console.warn(`[geocoding] rejected non-place result: class=${item.class} displayName=${item.display_name}`)
+        return null
+      }
+    }
+
     if (!item) return null
 
-    const [minLat, maxLat, minLon, maxLon] = item.boundingbox ?? ['0', '0', '0', '0']
+    const [minLat, maxLat, minLon, maxLon] = (item.boundingbox as string[]) ?? ['0', '0', '0', '0']
     const nominatimBbox: [number, number, number, number] = [
       parseFloat(minLon), parseFloat(minLat), parseFloat(maxLon), parseFloat(maxLat),
     ]
+    const address = item.address as Record<string, string> | undefined
 
     return {
-      displayName: item.display_name ?? cityName,
+      displayName: (item.display_name as string) ?? cityName,
       bbox: override?.bboxOverride ?? nominatimBbox,
-      osmId: item.osm_id ?? override?.osmId ?? '',
-      osmType: item.osm_type ?? 'relation',
-      geojson: item.geojson ?? null,
-      countryCode: (item.address?.country_code ?? '').toLowerCase(),
+      osmId: (item.osm_id as string) ?? override?.osmId ?? '',
+      osmType: (item.osm_type as string) ?? 'relation',
+      geojson: (item.geojson as GeoJSON.Geometry) ?? null,
+      countryCode: (address?.country_code ?? '').toLowerCase(),
     }
   } catch (err) {
     console.error('[geocoding] geocodeCity error:', err)

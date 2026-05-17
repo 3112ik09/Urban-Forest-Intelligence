@@ -85,7 +85,16 @@ export default function PlantingCards({ result, onZoneClick }: Props) {
                   {TYPE_LABELS[zone.site_type] ?? zone.site_type}
                 </span>
               </div>
-              <span style={{ fontSize: '11px', fontWeight: 600, color: '#16a34a' }}>
+              <span style={{
+                fontSize: '11px', fontWeight: 600,
+                color: (() => {
+                  const n = parseFloat(zone.cooling_impact)
+                  if (isNaN(n)) return '#16a34a'
+                  if (n <= -1.5) return '#16a34a'
+                  if (n <= -0.5) return '#d97706'
+                  return '#9ca3af'
+                })(),
+              }}>
                 {zone.cooling_impact}
               </span>
             </div>
@@ -99,9 +108,36 @@ export default function PlantingCards({ result, onZoneClick }: Props) {
               {zone.estimated_trees.toLocaleString()} trees · {zone.planting_method}
             </div>
 
+            {zone._species && zone._species.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '5px' }}>
+                {zone._species.slice(0, 3).map(s => (
+                  <span key={s.name} style={{
+                    fontSize: '10px', background: '#dcfce7', color: '#166534',
+                    padding: '1px 7px', borderRadius: '10px', fontWeight: 500,
+                  }}>{s.name}</span>
+                ))}
+              </div>
+            )}
+
+            {(zone._carbon_10yr != null || zone._people_impacted != null || zone._cost_inr != null) && (
+              <div style={{ fontSize: '10px', color: '#6b7280', marginBottom: '4px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                {zone._carbon_10yr != null && <span>🌿 ~{zone._carbon_10yr.toFixed(0)}t CO₂/10yr</span>}
+                {zone._people_impacted != null && <span>👥 ~{zone._people_impacted.toLocaleString()} people</span>}
+                {zone._cost_inr != null && (
+                  <span>💰 ₹{(Math.round(zone._cost_inr / 100000 * 10) / 10).toFixed(1)}L est.</span>
+                )}
+              </div>
+            )}
+
             <div style={{ fontSize: '11px', color: '#9ca3af', fontStyle: 'italic', lineHeight: 1.5 }}>
               &quot;{zone.gemma_reasoning}&quot;
             </div>
+
+            {(zone as unknown as Record<string, unknown>)._mcda_score != null && (
+              <div style={{ fontSize: '10px', color: '#d1d5db', marginTop: '3px' }}>
+                MCDA: {String((zone as unknown as Record<string, unknown>)._mcda_score)}/100
+              </div>
+            )}
 
             {onZoneClick && (
               <div style={{ fontSize: '10px', color: '#2563eb', marginTop: '5px' }}>

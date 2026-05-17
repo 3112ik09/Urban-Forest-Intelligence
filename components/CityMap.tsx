@@ -166,14 +166,14 @@ export default function CityMap({
         boxShadow: '0 1px 4px rgba(0,0,0,0.3)', fontSize: '11px', pointerEvents: 'none',
       }}>
         {[
-          { color: '#97C459', label: 'Green cover ≥ 35%' },
-          { color: '#EF9F27', label: 'Green cover 15–34%' },
-          { color: '#E24B4A', label: 'Green cover < 15%' },
-          { color: '#e5e7eb', label: 'Not analysed' },
-        ].map(({ color, label }) => (
+          { color: '#97C459', label: 'Green cover ≥ 35%',         labelColor: '#374151' },
+          { color: '#EF9F27', label: 'Green cover 15–34%',        labelColor: '#374151' },
+          { color: '#E24B4A', label: 'Green cover < 15% — critical', labelColor: '#dc2626' },
+          { color: '#e5e7eb', label: 'Not analysed',              labelColor: '#9ca3af' },
+        ].map(({ color, label, labelColor }) => (
           <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
             <div style={{ width: '12px', height: '12px', borderRadius: '2px', background: color, border: '1px solid #d1d5db' }} />
-            <span style={{ color: '#374151' }}>{label}</span>
+            <span style={{ color: labelColor, fontWeight: labelColor === '#dc2626' ? 600 : 400 }}>{label}</span>
           </div>
         ))}
       </div>

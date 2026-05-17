@@ -1,0 +1,530 @@
+{
+  "district": "Richmond County",
+  "city": "New York",
+  "bbox": [
+    -74.2606,
+    40.4774,
+    -74.0342,
+    40.6505
+  ],
+  "config": {
+    "bareThreshold": 0.1,
+    "minPatchHa": 0.15,
+    "targetCanopyPct": 0.35,
+    "geeScale": 10
+  },
+  "summary": {
+    "size_cap_rejected": 0,
+    "restricted_rejected": 0,
+    "water_rejected": 8,
+    "mcda_rejected": 8,
+    "agent1_rejected": 0,
+    "validator_rejected": 0,
+    "agent2_rejected": 0,
+    "final_selected": 2
+  },
+  "patches_by_stage": {
+    "size_cap_rejected": [],
+    "restricted_rejected": [],
+    "water_rejected": [
+      {
+        "id": "p4_19",
+        "areaHa": 3.2,
+        "bands": {
+          "trees": 0.09986180921592405,
+          "grass": 0.05539991725006234,
+          "bare": 0.13056670133424597,
+          "built": 0.15293133838265566,
+          "water": 0.2679762153732754,
+          "shrub_and_scrub": 0.08079291810423476
+        },
+        "siteType": "unknown",
+        "placeName": "Brooklyn",
+        "centroid": {
+          "lat": 40.619635525051905,
+          "lon": -74.04094234769919
+        },
+        "drop_reason": "water=0.27>0.20"
+      },
+      {
+        "id": "p3_7",
+        "areaHa": 3.08,
+        "bands": {
+          "trees": 0.069285792364935,
+          "grass": 0.07529203060590747,
+          "bare": 0.1467363197120581,
+          "built": 0.08177763960374812,
+          "water": 0.24670097962452175,
+          "shrub_and_scrub": 0.10133584838511978
+        },
+        "siteType": "unknown",
+        "placeName": "Staten Island",
+        "centroid": {
+          "lat": 40.51141087237285,
+          "lon": -74.19487033517993
+        },
+        "drop_reason": "water=0.25>0.20"
+      },
+      {
+        "id": "p4_18",
+        "areaHa": 1.15,
+        "bands": {
+          "trees": 0.07036286568211984,
+          "grass": 0.05240219073101317,
+          "bare": 0.10164151037889262,
+          "built": 0.20809767150356315,
+          "water": 0.28638911438016706,
+          "shrub_and_scrub": 0.0680969519600173
+        },
+        "siteType": "unknown",
+        "placeName": "Brooklyn",
+        "centroid": {
+          "lat": 40.62600928587732,
+          "lon": -74.04139150534125
+        },
+        "drop_reason": "water=0.29>0.20"
+      },
+      {
+        "id": "p4_6",
+        "areaHa": 0.9,
+        "bands": {
+          "trees": 0.06373422646702762,
+          "grass": 0.06059511330259047,
+          "bare": 0.10908658777552342,
+          "built": 0.1403826061178073,
+          "water": 0.3214769749922423,
+          "shrub_and_scrub": 0.0860780419321391
+        },
+        "siteType": "unknown",
+        "placeName": "Brooklyn",
+        "centroid": {
+          "lat": 40.63428576402835,
+          "lon": -74.03877441348021
+        },
+        "drop_reason": "water=0.32>0.20"
+      },
+      {
+        "id": "p4_24",
+        "areaHa": 0.66,
+        "bands": {
+          "trees": 0.03395434899702087,
+          "grass": 0.03576279436509226,
+          "bare": 0.12005672299232018,
+          "built": 0.1495762483229443,
+          "water": 0.4000529179200571,
+          "shrub_and_scrub": 0.05820528602273333
+        },
+        "siteType": "unknown",
+        "placeName": "Staten Island",
+        "centroid": {
+          "lat": 40.62960254701379,
+          "lon": -74.07096604075066
+        },
+        "drop_reason": "water=0.40>0.20"
+      },
+      {
+        "id": "p4_5",
+        "areaHa": 0.63,
+        "bands": {
+          "trees": 0.04144177664561484,
+          "grass": 0.03696538731737794,
+          "bare": 0.1323595127738552,
+          "built": 0.1121505913286516,
+          "water": 0.36368790093724634,
+          "shrub_and_scrub": 0.07216599363843428
+        },
+        "siteType": "unknown",
+        "placeName": "Staten Island",
+        "centroid": {
+          "lat": 40.60849641552881,
+          "lon": -74.03824740184686
+        },
+        "drop_reason": "water=0.36>0.20"
+      },
+      {
+        "id": "p4_3",
+        "areaHa": 0.57,
+        "bands": {
+          "trees": 0.06517339650022795,
+          "grass": 0.06497830390505777,
+          "bare": 0.10783589314523735,
+          "built": 0.18885755538509957,
+          "water": 0.28562993280294924,
+          "shrub_and_scrub": 0.07568103159527627
+        },
+        "siteType": "unknown",
+        "placeName": "Brooklyn",
+        "centroid": {
+          "lat": 40.63669651559082,
+          "lon": -74.03756141562988
+        },
+        "drop_reason": "water=0.29>0.20"
+      },
+      {
+        "id": "p4_21",
+        "areaHa": 0.36,
+        "bands": {
+          "trees": 0.030141555240904307,
+          "grass": 0.03477672885665774,
+          "bare": 0.1137531934086632,
+          "built": 0.1143360574517413,
+          "water": 0.4567599516521395,
+          "shrub_and_scrub": 0.05281679155608582
+        },
+        "siteType": "unknown",
+        "placeName": "Staten Island",
+        "centroid": {
+          "lat": 40.6289138386293,
+          "lon": -74.06908955993495
+        },
+        "drop_reason": "water=0.46>0.20"
+      }
+    ],
+    "mcda_rejected": [
+      {
+        "id": "p4_27",
+        "areaHa": 6.33,
+        "mcdaScore": 86,
+        "bands": {
+          "trees": 0.030230543774563134,
+          "grass": 0.028219959136934675,
+          "bare": 0.12561680050481455,
+          "built": 0.4577488657490428,
+          "water": 0.11588381349171163,
+          "shrub_and_scrub": 0.043556213555083004
+        },
+        "siteType": "unknown",
+        "placeName": "Staten Island",
+        "centroid": {
+          "lat": 40.643412647315,
+          "lon": -74.07303016964795
+        },
+        "drop_reason": "built=0.46>0.45"
+      },
+      {
+        "id": "p3_6",
+        "areaHa": 2.11,
+        "mcdaScore": 86,
+        "bands": {
+          "trees": 0.05762629915617023,
+          "grass": 0.08983599009882158,
+          "bare": 0.1283194024129264,
+          "built": 0.15737298995392368,
+          "water": 0.17913986876259214,
+          "shrub_and_scrub": 0.10955228791377612
+        },
+        "siteType": "unknown",
+        "placeName": "Staten Island",
+        "centroid": {
+          "lat": 40.51600844049098,
+          "lon": -74.18910448189331
+        },
+        "drop_reason": "water=0.18>0.15"
+      },
+      {
+        "id": "p4_13",
+        "areaHa": 2.32,
+        "mcdaScore": 84,
+        "bands": {
+          "trees": 0.0844587499844349,
+          "grass": 0.08478829472977352,
+          "bare": 0.14132073498524375,
+          "built": 0.17028765104130525,
+          "water": 0.16679787519227982,
+          "shrub_and_scrub": 0.11296297803291581
+        },
+        "siteType": "unknown",
+        "placeName": "Brooklyn",
+        "centroid": {
+          "lat": 40.61329864088019,
+          "lon": -74.03854477518225
+        },
+        "drop_reason": "water=0.17>0.15"
+      },
+      {
+        "id": "p4_1",
+        "areaHa": 3.08,
+        "mcdaScore": 81,
+        "bands": {
+          "trees": 0.04564717995508214,
+          "grass": 0.039958541776556715,
+          "bare": 0.1243756176821206,
+          "built": 0.35076813096660825,
+          "water": 0.16885773129672002,
+          "shrub_and_scrub": 0.06481092652250353
+        },
+        "siteType": "unknown",
+        "placeName": "Brooklyn",
+        "centroid": {
+          "lat": 40.64189629111539,
+          "lon": -74.03510689161357
+        },
+        "drop_reason": "water=0.17>0.15"
+      },
+      {
+        "id": "p4_0",
+        "areaHa": 2.5,
+        "mcdaScore": 81,
+        "bands": {
+          "trees": 0.06531496468088216,
+          "grass": 0.05694072828483482,
+          "bare": 0.13140559211440742,
+          "built": 0.27155703163344397,
+          "water": 0.16512054283906372,
+          "shrub_and_scrub": 0.0937450186571665
+        },
+        "siteType": "unknown",
+        "placeName": "Staten Island",
+        "centroid": {
+          "lat": 40.60903861296816,
+          "lon": -74.0353615639966
+        },
+        "drop_reason": "water=0.17>0.15"
+      },
+      {
+        "id": "p4_23",
+        "areaHa": 2.8,
+        "mcdaScore": 70,
+        "bands": {
+          "trees": 0.03228387387574391,
+          "grass": 0.028338971554344485,
+          "bare": 0.11854008059126911,
+          "built": 0.5382130834490989,
+          "water": 0.06475500896170733,
+          "shrub_and_scrub": 0.043550261993156404
+        },
+        "siteType": "unknown",
+        "placeName": "Staten Island",
+        "centroid": {
+          "lat": 40.62000928837547,
+          "lon": -74.06965474996785
+        },
+        "drop_reason": "built=0.54>0.45"
+      },
+      {
+        "id": "p4_26",
+        "areaHa": 2.74,
+        "mcdaScore": 70,
+        "bands": {
+          "trees": 0.03271116143801384,
+          "grass": 0.031086769037752735,
+          "bare": 0.11696562988558601,
+          "built": 0.5131178323469353,
+          "water": 0.0672016752062487,
+          "shrub_and_scrub": 0.0541268121152304
+        },
+        "siteType": "unknown",
+        "placeName": "Staten Island",
+        "centroid": {
+          "lat": 40.63221646835032,
+          "lon": -74.07385239234331
+        },
+        "drop_reason": "built=0.51>0.45"
+      },
+      {
+        "id": "p3_8",
+        "areaHa": 0.48,
+        "mcdaScore": 67,
+        "bands": {
+          "trees": 0.08080693084307235,
+          "grass": 0.08727007070244966,
+          "bare": 0.12220258770369684,
+          "built": 0.16898486476792707,
+          "water": 0.1515027864732703,
+          "shrub_and_scrub": 0.0921730502788864
+        },
+        "siteType": "unknown",
+        "placeName": "Staten Island",
+        "centroid": {
+          "lat": 40.51426635049356,
+          "lon": -74.19852930641585
+        },
+        "drop_reason": "area=0.48<0.5ha, water=0.15>0.15"
+      }
+    ],
+    "candidates": [
+      {
+        "id": "p4_25",
+        "areaHa": 6.91,
+        "mcdaScore": 100,
+        "bands": {
+          "trees": 0.040621455663284387,
+          "grass": 0.04067326409902729,
+          "bare": 0.16980510082115263,
+          "built": 0.3688123077049035,
+          "water": 0.11310856254481555,
+          "shrub_and_scrub": 0.062214048520205616
+        },
+        "siteType": "mixed_open",
+        "placeName": "Staten Island",
+        "centroid": {
+          "lat": 40.62349724025397,
+          "lon": -74.07239309415992
+        },
+        "agent1": {
+          "site_id": "p4_25",
+          "verdict": "approve",
+          "mcda_score": 100,
+          "visual_confidence": 0.5,
+          "adjusted_score": 100,
+          "issues": [],
+          "positive_signals": [],
+          "reasoning": "Agent 1 parsing failed \u2014 defaulting to approve"
+        },
+        "validator": {
+          "passed": true,
+          "compactness": 0.2467163024808699,
+          "reason": "approved"
+        },
+        "agent2": {
+          "site_id": "p4_25",
+          "final_rank": 1,
+          "plantable": true,
+          "species": [
+            {
+              "name": "Native species",
+              "why": "suitable for local climate"
+            }
+          ],
+          "planting_method": "ground planting",
+          "estimated_trees": 3144,
+          "temp_reduction_c": 0.6,
+          "carbon_10yr_tons": 78.6,
+          "people_impacted": 726,
+          "cost_estimate_inr": 1414800,
+          "reasoning": "Agent 2 unavailable \u2014 formula estimate"
+        },
+        "final_stage": "selected"
+      },
+      {
+        "id": "p4_30",
+        "areaHa": 3.83,
+        "mcdaScore": 81,
+        "bands": {
+          "trees": 0.04135326015021994,
+          "grass": 0.035608947846138446,
+          "bare": 0.1382504536845904,
+          "built": 0.40550379790245045,
+          "water": 0.10018297385141336,
+          "shrub_and_scrub": 0.05686875548845754
+        },
+        "siteType": "unknown",
+        "placeName": "Staten Island",
+        "centroid": {
+          "lat": 40.64677792222765,
+          "lon": -74.07831226351857
+        },
+        "agent1": {
+          "site_id": "p4_30",
+          "verdict": "approve",
+          "mcda_score": 81,
+          "visual_confidence": 0.5,
+          "adjusted_score": 81,
+          "issues": [],
+          "positive_signals": [],
+          "reasoning": "Agent 1 parsing failed \u2014 defaulting to approve"
+        },
+        "validator": {
+          "passed": true,
+          "compactness": 0.27630364531862595,
+          "reason": "approved"
+        },
+        "agent2": {
+          "site_id": "p4_30",
+          "final_rank": 2,
+          "plantable": true,
+          "species": [
+            {
+              "name": "Native species",
+              "why": "suitable for local climate"
+            }
+          ],
+          "planting_method": "ground planting",
+          "estimated_trees": 1743,
+          "temp_reduction_c": 0.3,
+          "carbon_10yr_tons": 43.6,
+          "people_impacted": 402,
+          "cost_estimate_inr": 784350,
+          "reasoning": "Agent 2 call failed \u2014 formula fallback"
+        },
+        "final_stage": "selected"
+      }
+    ],
+    "selected": [
+      {
+        "id": "p4_25",
+        "areaHa": 6.91,
+        "mcdaScore": 100,
+        "bands": {
+          "trees": 0.040621455663284387,
+          "grass": 0.04067326409902729,
+          "bare": 0.16980510082115263,
+          "built": 0.3688123077049035,
+          "water": 0.11310856254481555,
+          "shrub_and_scrub": 0.062214048520205616
+        },
+        "siteType": "mixed_open",
+        "placeName": "Staten Island",
+        "centroid": {
+          "lat": 40.62349724025397,
+          "lon": -74.07239309415992
+        },
+        "plan": {
+          "site_id": "p4_25",
+          "final_rank": 1,
+          "plantable": true,
+          "species": [
+            {
+              "name": "Native species",
+              "why": "suitable for local climate"
+            }
+          ],
+          "planting_method": "ground planting",
+          "estimated_trees": 3144,
+          "temp_reduction_c": 0.6,
+          "carbon_10yr_tons": 78.6,
+          "people_impacted": 726,
+          "cost_estimate_inr": 1414800,
+          "reasoning": "Agent 2 unavailable \u2014 formula estimate"
+        }
+      },
+      {
+        "id": "p4_30",
+        "areaHa": 3.83,
+        "mcdaScore": 81,
+        "bands": {
+          "trees": 0.04135326015021994,
+          "grass": 0.035608947846138446,
+          "bare": 0.1382504536845904,
+          "built": 0.40550379790245045,
+          "water": 0.10018297385141336,
+          "shrub_and_scrub": 0.05686875548845754
+        },
+        "siteType": "unknown",
+        "placeName": "Staten Island",
+        "centroid": {
+          "lat": 40.64677792222765,
+          "lon": -74.07831226351857
+        },
+        "plan": {
+          "site_id": "p4_30",
+          "final_rank": 2,
+          "plantable": true,
+          "species": [
+            {
+              "name": "Native species",
+              "why": "suitable for local climate"
+            }
+          ],
+          "planting_method": "ground planting",
+          "estimated_trees": 1743,
+          "temp_reduction_c": 0.3,
+          "carbon_10yr_tons": 43.6,
+          "people_impacted": 402,
+          "cost_estimate_inr": 784350,
+          "reasoning": "Agent 2 call failed \u2014 formula fallback"
+        }
+      }
+    ]
+  }
+}

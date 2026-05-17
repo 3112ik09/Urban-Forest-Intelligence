@@ -1,0 +1,133 @@
+[11:36:46] [INFO] ======================================================================
+[11:36:46] [INFO] Urban Forest AI — Debug pipeline for Richmond County, New York
+[11:36:46] [INFO] BBOX   : [-74.2606, 40.4774, -74.0342, 40.6505]
+[11:36:46] [INFO] Config : bareThreshold=0.1  minPatchHa=0.15  targetCanopyPct=0.35  geeScale=10
+[11:36:46] [INFO] ======================================================================
+[11:36:46] [INFO] Getting GEE token...
+[11:36:46] [INFO] GEE auth OK
+[11:36:46] [INFO] ════════════════════════════════════════════════════════════
+[11:36:46] [INFO] PHASE 1 — 4×4 coarse grid hotspot scan
+[11:36:46] [INFO] Fetching DW bands for 16 grid cells...
+[11:36:47] [INFO]   Cell 01: bare=0.040 built=0.152 trees=0.103 water=0.491 deficit=0.207
+[11:37:01] [INFO]   Cell 02: bare=0.036 built=0.042 trees=0.045 water=0.704 deficit=0.273
+[11:37:12] [INFO]   Cell 03: bare=0.037 built=0.025 trees=0.038 water=0.739 deficit=0.284
+[11:37:22] [INFO]   Cell 04: bare=0.036 built=0.027 trees=0.038 water=0.740 deficit=0.283
+[11:37:33] [INFO]   Cell 05: bare=0.061 built=0.301 trees=0.140 water=0.208 deficit=0.152
+[11:37:45] [INFO]   Cell 06: bare=0.048 built=0.451 trees=0.140 water=0.101 deficit=0.162
+[11:38:01] [INFO]   Cell 07: bare=0.048 built=0.152 trees=0.087 water=0.485 deficit=0.216
+[11:38:15] [INFO]   Cell 08: bare=0.037 built=0.027 trees=0.037 water=0.740 deficit=0.284
+[11:38:28] [INFO]   Cell 09: bare=0.064 built=0.405 trees=0.091 water=0.130 deficit=0.203
+[11:39:15] [INFO]   Cell 10: bare=0.066 built=0.239 trees=0.194 water=0.110 deficit=0.067
+[11:39:26] [INFO]   Cell 11: bare=0.048 built=0.425 trees=0.200 water=0.045 deficit=0.097
+[11:40:56] [WARN]   Cell 12 FAILED: HTTPSConnectionPool(host='earthengine.googleapis.com', port=443): Read timed out. (read timeout=90)
+[11:41:02] [INFO]   Cell 13: bare=0.066 built=0.470 trees=0.066 water=0.085 deficit=0.230
+[11:41:14] [INFO]   Cell 14: bare=0.063 built=0.302 trees=0.127 water=0.198 deficit=0.159
+[11:41:22] [INFO]   Cell 15: bare=0.049 built=0.479 trees=0.090 water=0.129 deficit=0.216
+[11:41:41] [INFO]   Cell 16: bare=0.043 built=0.266 trees=0.051 water=0.436 deficit=0.264
+[11:41:41] [INFO] Phase 1 done — top 5 hotspots by canopy deficit:
+[11:41:41] [INFO]   Hotspot 1: bare=0.037 built=0.025 deficit=0.284  bbox=[-74.1474, 40.4774, -74.0908, 40.5207]
+[11:41:41] [INFO]   Hotspot 2: bare=0.037 built=0.027 deficit=0.284  bbox=[-74.0908, 40.5207, -74.0342, 40.564]
+[11:41:41] [INFO]   Hotspot 3: bare=0.036 built=0.027 deficit=0.283  bbox=[-74.0908, 40.4774, -74.0342, 40.5207]
+[11:41:41] [INFO]   Hotspot 4: bare=0.036 built=0.042 deficit=0.273  bbox=[-74.204, 40.4774, -74.1474, 40.5207]
+[11:41:41] [INFO]   Hotspot 5: bare=0.043 built=0.266 deficit=0.264  bbox=[-74.0908, 40.6072, -74.0342, 40.6505]
+[11:41:41] [INFO] ════════════════════════════════════════════════════════════
+[11:41:41] [INFO] PHASE 2 — GEE reduceToVectors in 5 hotspot areas (bare > 0.1, minPatch=0.15ha)
+[11:41:43] [INFO]   Area 1: 0 raw polygon features from GEE
+[11:41:46] [INFO]   Area 2: 0 raw polygon features from GEE
+[11:41:49] [INFO]   Area 3: 0 raw polygon features from GEE
+[11:41:53] [INFO]   Area 4: 12 raw polygon features from GEE
+[11:41:58] [INFO]   Area 5: 33 raw polygon features from GEE
+[11:41:58] [INFO] Phase 2 done — 25 patches ≥ 0.15ha
+[11:41:58] [INFO] ════════════════════════════════════════════════════════════
+[11:41:58] [INFO] PHASE 3 — Per-polygon DW band validation (20 patches)
+[11:42:00] [INFO]   01. p4_26        mixed_open      6.9ha  bare=0.17 built=0.37 water=0.11 trees=0.04  name=Staten Island
+[11:42:03] [INFO]   02. p4_28        unknown         6.4ha  bare=0.13 built=0.46 water=0.12 trees=0.03  name=Staten Island
+[11:42:05] [INFO]   03. p4_31        unknown         3.8ha  bare=0.14 built=0.41 water=0.10 trees=0.04  name=Staten Island
+[11:42:07] [INFO]   04. p4_20        unknown         3.2ha  bare=0.13 built=0.15 water=0.27 trees=0.10  name=Brooklyn
+[11:42:11] [INFO]   05. p3_6         unknown         3.1ha  bare=0.15 built=0.08 water=0.25 trees=0.07  name=Staten Island
+[11:42:14] [INFO]   06. p4_1         unknown         3.1ha  bare=0.12 built=0.35 water=0.16 trees=0.05  name=Brooklyn
+[11:42:15] [INFO]   07. p4_24        unknown         2.8ha  bare=0.12 built=0.54 water=0.06 trees=0.03  name=Staten Island
+[11:42:17] [INFO]   08. p4_27        unknown         2.7ha  bare=0.12 built=0.51 water=0.07 trees=0.03  name=Staten Island
+[11:42:21] [INFO]   09. p4_0         unknown         2.5ha  bare=0.13 built=0.27 water=0.17 trees=0.07  name=Staten Island
+[11:42:24] [INFO]   10. p4_13        unknown         2.3ha  bare=0.14 built=0.17 water=0.17 trees=0.08  name=Brooklyn
+[11:42:25] [INFO]   11. p3_5         unknown         2.1ha  bare=0.13 built=0.16 water=0.18 trees=0.06  name=Staten Island
+[11:42:27] [INFO]   12. p4_19        unknown         1.1ha  bare=0.10 built=0.21 water=0.29 trees=0.07  name=Brooklyn
+[11:42:31] [INFO]   13. p4_6         unknown         0.9ha  bare=0.11 built=0.14 water=0.32 trees=0.06  name=Brooklyn
+[11:42:34] [INFO]   14. p4_25        unknown         0.7ha  bare=0.12 built=0.15 water=0.40 trees=0.03  name=Staten Island
+[11:42:37] [INFO]   15. p4_5         unknown         0.6ha  bare=0.13 built=0.11 water=0.36 trees=0.04  name=Staten Island
+[11:42:39] [INFO]   16. p4_21        unknown         0.6ha  bare=0.11 built=0.49 water=0.07 trees=0.04  name=Staten Island
+[11:42:43] [INFO]   17. p4_3         unknown         0.6ha  bare=0.11 built=0.19 water=0.29 trees=0.07  name=Brooklyn
+[11:42:45] [INFO]   18. p3_7         unknown         0.5ha  bare=0.12 built=0.17 water=0.15 trees=0.08  name=Staten Island
+[11:42:47] [INFO]   19. p4_22        unknown         0.4ha  bare=0.11 built=0.11 water=0.46 trees=0.03  name=Staten Island
+[11:42:50] [INFO]   20. p4_32        unknown         0.3ha  bare=0.12 built=0.47 water=0.09 trees=0.05  name=Staten Island
+[11:42:50] [INFO] Phase 3 done — 20 validated
+[11:42:50] [INFO] ════════════════════════════════════════════════════════════
+[11:42:50] [INFO] FILTER A — Drop patches with water > 0.20 (waterfront / dock)
+[11:42:50] [INFO]   DROP water=0.27  p4_20  Brooklyn
+[11:42:50] [INFO]   DROP water=0.25  p3_6  Staten Island
+[11:42:50] [INFO]   DROP water=0.29  p4_19  Brooklyn
+[11:42:50] [INFO]   DROP water=0.32  p4_6  Brooklyn
+[11:42:50] [INFO]   DROP water=0.40  p4_25  Staten Island
+[11:42:50] [INFO]   DROP water=0.36  p4_5  Staten Island
+[11:42:50] [INFO]   DROP water=0.29  p4_3  Brooklyn
+[11:42:50] [INFO]   DROP water=0.46  p4_22  Staten Island
+[11:42:50] [INFO] Water filter: 20 → 12 kept, 8 dropped
+[11:42:50] [INFO] ════════════════════════════════════════════════════════════
+[11:42:50] [INFO] FILTER B — MCDA scoring + pre-filter (built>0.45 | area<0.5ha | water>0.15)
+[11:42:50] [INFO]   MCDA scores (all patches):
+[11:42:50] [INFO]     MCDA=100  p4_26         mixed_open       area=6.9ha
+[11:42:50] [INFO]     MCDA= 86  p4_28         unknown          area=6.4ha
+[11:42:50] [INFO]     MCDA= 86  p3_5          unknown          area=2.1ha
+[11:42:50] [INFO]     MCDA= 84  p4_13         unknown          area=2.3ha
+[11:42:50] [INFO]     MCDA= 81  p4_31         unknown          area=3.8ha
+[11:42:50] [INFO]     MCDA= 81  p4_1          unknown          area=3.1ha
+[11:42:50] [INFO]     MCDA= 81  p4_0          unknown          area=2.5ha
+[11:42:50] [INFO]     MCDA= 70  p4_24         unknown          area=2.8ha
+[11:42:50] [INFO]     MCDA= 70  p4_27         unknown          area=2.7ha
+[11:42:50] [INFO]     MCDA= 67  p3_7          unknown          area=0.5ha
+[11:42:50] [INFO]     MCDA= 53  p4_21         unknown          area=0.6ha
+[11:42:50] [INFO]     MCDA= 47  p4_32         unknown          area=0.3ha
+[11:42:50] [INFO]   DROP p4_28        MCDA= 86: built=0.46>0.45
+[11:42:50] [INFO]   DROP p3_5         MCDA= 86: water=0.18>0.15
+[11:42:50] [INFO]   DROP p4_13        MCDA= 84: water=0.17>0.15
+[11:42:50] [INFO]   DROP p4_1         MCDA= 81: water=0.16>0.15
+[11:42:50] [INFO]   DROP p4_0         MCDA= 81: water=0.17>0.15
+[11:42:50] [INFO]   DROP p4_24        MCDA= 70: built=0.54>0.45
+[11:42:50] [INFO]   DROP p4_27        MCDA= 70: built=0.51>0.45
+[11:42:50] [INFO]   DROP p3_7         MCDA= 67: area=0.48<0.5ha, water=0.15>0.15
+[11:42:50] [INFO] Pre-filter: top10 → 2 candidates for Agent 1
+[11:42:50] [INFO] ════════════════════════════════════════════════════════════
+[11:42:50] [INFO] SATELLITE TILES — fetching for all patches (candidates + rejected)
+[11:42:57] [INFO] Tiles fetched: 2 candidate tiles, 16 rejected tiles
+[11:42:57] [INFO] ════════════════════════════════════════════════════════════
+[11:42:57] [INFO] AGENT 1 — Gemma 4 vision critique on 2 candidates
+[11:43:00] [ERROR] Gemma API error 500: {
+  "error": {
+    "code": 500,
+    "message": "Internal error encountered.",
+    "status": "INTERNAL"
+  }
+}
+
+[11:43:00] [INFO]   Validator p4_26       : verdict=approve compactness=0.248 passed=True (approved)
+[11:43:00] [INFO]   Validator p4_31       : verdict=approve compactness=0.276 passed=True (approved)
+[11:43:00] [INFO] ════════════════════════════════════════════════════════════
+[11:43:00] [INFO] AGENT 1 + VALIDATOR — final verdicts
+[11:43:00] [INFO]   p4_26        MCDA=100  verdict=—       passed=True  
+[11:43:00] [INFO]   p4_31        MCDA= 81  verdict=—       passed=True  
+[11:43:00] [INFO] ════════════════════════════════════════════════════════════
+[11:43:00] [INFO] PIPELINE SUMMARY
+[11:43:00] [INFO]   GEE patches found         : 25
+[11:43:00] [INFO]   After Phase 3 validation  : 20
+[11:43:00] [INFO]   After water filter        : 12  (dropped 8)
+[11:43:00] [INFO]   After MCDA pre-filter     : 2  (dropped 8)
+[11:43:00] [INFO]   Final selected zones      : 2
+[11:43:00] [INFO] 
+ROOT CAUSE NOTES:
+[11:43:00] [INFO]   DW 'bare' band captures impervious concrete/asphalt (ferry aprons, parking)
+[11:43:00] [INFO]   in addition to actual bare soil — which is why port areas score high.
+[11:43:00] [INFO]   The restricted-zone Overpass filter only checks patch CENTROID containment,
+[11:43:00] [INFO]   so patches whose centroid is just outside a port polygon slip through.
+[11:43:00] [INFO]   Fix → tighter water threshold (0.10 for NYC) or polygon-overlap test.
+[11:43:00] [INFO] Results JSON saved → debug_output/results.json
+[11:43:00] [INFO] Skipping grid.png (matplotlib not installed)

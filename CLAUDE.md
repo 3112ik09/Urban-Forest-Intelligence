@@ -67,6 +67,14 @@ Required in `.env.local` (never `.env.example`):
 | `GEE_PRIVATE_KEY` | PKCS8 private key; store with literal `\n` (the code does `.replace(/\\n/g, '\n')`) |
 | `GEE_PROJECT_ID` | Google Cloud project ID registered with Earth Engine |
 
+**Multi-agent planning loop:**
+The zone discovery pipeline uses two Gemma agents:
+- Agent 1 (Gemma Critic): receives MCDA score + band values + satellite tile per patch. Approves, reviews, or rejects based on visual + quantitative evidence. Temperature 0.1, maxOutputTokens 3000.
+- Spatial Validator: pure TypeScript checks — Polsby-Popper compactness, boundary containment, restricted zone overlap. Can override Agent 1 `review` verdicts. Implemented in `runSpatialValidator()` in `lib/gemma.ts`.
+- Agent 2 (Gemma Planner): receives only validator-passed patches + Agent 1 critiques. Outputs final ranking, species recommendations, and climate impact estimates. Temperature 0.2, maxOutputTokens 2500.
+Both agents use `gemma-4-31b-it`. Total latency addition: ~8–12s.
+Fallback: if both agents fail or return 0 zones, `buildZonesMCDA()` is used (old MCDA-only path). `reRankZonesWithGemma()` is kept for reference but no longer used in the main pipeline.
+
 ## Key files
 
 - `lib/geocoding.ts` — Nominatim city geocoding + Overpass district boundary discovery

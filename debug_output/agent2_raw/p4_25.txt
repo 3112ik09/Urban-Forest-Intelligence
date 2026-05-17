@@ -1,0 +1,40 @@
+*   Role: Agent 2 — Urban Forest Planner for Richmond County, New York.
+    *   Input: Satellite image, site data (Site 1, id: p4_25, Staten Island, 6.9ha total, 4.8ha plantable), and climate zone species guidance (Red Maple, Sweetgum, Ginkgo, London Plane).
+    *   Task: Create an actionable planting plan.
+    *   Constraints:
+        *   Return ONLY a valid JSON array with one `AgentPlan` object.
+        *   No prose, no markdown.
+        *   Use specific formulas for impact estimation.
+        *   Recommend 2-3 species from the guidance.
+
+    *   `site_id`: "p4_25"
+    *   `plantableHa`: 4.8
+    *   `estimated_trees`: $4.8 \times 650 = 3120$ (below cap of 25,000)
+    *   `temp_reduction_c`: $4.8 \times 0.12 = 0.576$ (below cap of 2.5)
+    *   `carbon_10yr_tons`: $3120 \times 0.025 = 78$
+    *   `people_impacted`: $4.8 \times 150 = 720$
+    *   `cost_estimate_inr`: $3120 \times 450 = 1,404,000$
+
+    *   Species: Red Maple (native, hardy), London Plane (urban tolerant), Ginkgo (pollution resistant).
+    *   Planting Method: Mixed canopy reforestation with strategic buffer zones along the rail and waterfront.
+
+    *   `site_id`: "p4_25"
+    *   `final_rank`: 1
+    *   `plantable`: true
+    *   `species`:
+        *   {"name": "Red Maple", "why": "Native species providing excellent shade and autumn color."}
+        *   {"name": "London Plane", "why": "Highly tolerant of urban pollution and soil compaction."}
+        *   {"name": "Ginkgo", "why": "Resilient to pests and urban stressors."}
+    *   `planting_method`: "Mixed canopy reforestation with buffer zones"
+    *   `estimated_trees`: 3120
+    *   `temp_reduction_c`: 0.576
+    *   `carbon_10yr_tons`: 78
+    *   `people_impacted`: 720
+    *   `cost_estimate_inr`: 1404000
+    *   `reasoning`: "Utilizing the 4.8ha plantable area to create a green buffer between the industrial rail corridor and the waterfront."
+
+    *   JSON array? Yes.
+    *   One AgentPlan object? Yes.
+    *   No prose/markdown? Yes.
+    *   Correct formulas? Yes.
+    *   Correct species? Yes.

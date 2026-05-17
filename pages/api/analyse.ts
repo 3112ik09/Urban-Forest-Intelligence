@@ -6,8 +6,8 @@ import type { NDVIResult } from './ndvi'
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
 
-  const body = req.body as NDVIResult & { cityName?: string }
-  const { district, cityName, ndvi_pct, green_cover_pct, estimated_temp_c, built_up_pct, barren_ha, verified_zones } = body
+  const body = req.body as NDVIResult & { cityName?: string; language?: string }
+  const { district, cityName, ndvi_pct, green_cover_pct, estimated_temp_c, built_up_pct, barren_ha, verified_zones, language } = body
 
   if (!district) return res.status(400).json({ error: 'district is required' })
 
@@ -22,6 +22,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     built_up_pct,
     barren_ha,
     zones: zones.length > 0 ? zones : undefined,
+    language,
   })
 
   // Fetch satellite tile for each of the top 3 zones in parallel
