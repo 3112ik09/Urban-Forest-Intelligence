@@ -372,6 +372,30 @@ export default function Home() {
             mapRef={mapRef}
             dimDistrict={zoneActive}
           />
+          {/* Hint — appears once districts load, disappears on first click */}
+          {cityDistricts.length > 0 && !selectedDistrict && !loading && (
+            <div style={{
+              position: 'absolute', bottom: '90px', left: '50%',
+              transform: 'translateX(-50%)', zIndex: 1000, pointerEvents: 'none',
+            }}>
+              <div style={{
+                background: 'rgba(255,255,255,0.96)',
+                borderRadius: '10px', padding: '9px 18px',
+                boxShadow: '0 4px 16px rgba(0,0,0,0.13)',
+                border: '1px solid #e5e7eb',
+                display: 'flex', alignItems: 'center', gap: '10px',
+                whiteSpace: 'nowrap',
+              }}>
+                <span className="animate-pulse" style={{
+                  width: '8px', height: '8px', borderRadius: '50%',
+                  background: '#16a34a', flexShrink: 0, display: 'inline-block',
+                }} />
+                <span style={{ fontSize: '13px', color: '#374151', fontWeight: 500 }}>
+                  Click any district on the map to begin satellite analysis
+                </span>
+              </div>
+            </div>
+          )}
         </div>
 
         <AnalysisPanel

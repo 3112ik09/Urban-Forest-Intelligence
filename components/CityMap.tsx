@@ -165,6 +165,9 @@ export default function CityMap({
         background: 'white', borderRadius: '8px', padding: '8px 12px',
         boxShadow: '0 1px 4px rgba(0,0,0,0.3)', fontSize: '11px', pointerEvents: 'none',
       }}>
+        <div style={{ fontSize: '10px', fontWeight: 600, color: '#374151', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+          Canopy cover by district
+        </div>
         {[
           { color: '#97C459', label: 'Green cover ≥ 35%',         labelColor: '#374151' },
           { color: '#EF9F27', label: 'Green cover 15–34%',        labelColor: '#374151' },
