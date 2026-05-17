@@ -1,6 +1,9 @@
 # env — never commit secrets
+.env
 .env.local
 .env*.local
+*.pem
+*.key
 
 # Next.js build output
 .next/
@@ -16,12 +19,20 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# Python virtualenv
+# Python virtualenv and debug scripts (uses GEE credentials)
 .venv/
+gee_test.py
+__pycache__/
+*.pyc
 
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/settings.json
+.idea/
 
 # Vercel
 .vercel
@@ -31,4 +42,5 @@ project_summary.md
 
 # Zone debug output
 debug-output/
+
 

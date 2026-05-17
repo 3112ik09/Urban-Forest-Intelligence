@@ -478,7 +478,6 @@ function isAgentFallbackSpecies(sp: string): boolean {
   )
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Doc = any
 
 // Draw a horizontal bar (gray track + colored fill)
