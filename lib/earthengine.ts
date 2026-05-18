@@ -281,37 +281,12 @@ export async function fetchDWGrid(
     }
   }
 
-  // Single batched reduceRegions call instead of N parallel reduceRegion calls
-  try {
-    const features = cells.map((cell, i) => {
-      const [cMinLon, cMinLat, cMaxLon, cMaxLat] = cell.cellBbox
-      return {
-        type: 'Feature',
-        geometry: { type: 'Polygon', coordinates: [[[cMinLon, cMaxLat], [cMinLon, cMinLat], [cMaxLon, cMinLat], [cMaxLon, cMaxLat], [cMinLon, cMaxLat]]] },
-        properties: { _idx: i },
-      }
-    })
-    const expression = fn('Image.reduceRegions', {
-      input: buildDWAllBandsNode(),
-      collection: { constantValue: { type: 'FeatureCollection', features } },
-      reducer: fn('Reducer.mean', {}),
-      scale: c(100),
-    })
-    const result = await geeCompute(token, expression) as { features?: Array<{ properties: Record<string, unknown> }> } | null
-    const resultFeatures = result?.features ?? []
-    return cells.map((cell, i) => {
-      const feat = resultFeatures.find(f => (f.properties?._idx as number) === i)
-      return { ...cell, bands: parseDWBands(feat?.properties ?? {}) }
-    })
-  } catch (err) {
-    console.warn('[gee] fetchDWGrid batch failed, falling back to parallel:', (err as Error).message)
-    const results = await Promise.allSettled(
-      cells.map(async cell => ({ ...cell, bands: await fetchDWBands(bboxToRing(cell.cellBbox), token) }))
-    )
-    return results
-      .filter((r): r is PromiseFulfilledResult<GridCell> => r.status === 'fulfilled')
-      .map(r => r.value)
-  }
+  const results = await Promise.allSettled(
+    cells.map(async cell => ({ ...cell, bands: await fetchDWBands(bboxToRing(cell.cellBbox), token) }))
+  )
+  return results
+    .filter((r): r is PromiseFulfilledResult<GridCell> => r.status === 'fulfilled')
+    .map(r => r.value)
 }
 
 export async function fetchDWTwoPassGrid(
@@ -540,35 +515,13 @@ export async function validatePatches(
   const work = patches.slice(0, 20)
   console.log(`[gee] validatePatches: validating ${work.length} patches`)
 
-  // Batch all band queries into a single reduceRegions call
-  let bandsByIdx: Map<number, DWBandValues> = new Map()
-  try {
-    const features = work.map((patch, i) => ({
-      type: 'Feature',
-      geometry: patch.polygon,
-      properties: { _idx: i },
-    }))
-    const expression = fn('Image.reduceRegions', {
-      input: buildDWAllBandsNode(),
-      collection: { constantValue: { type: 'FeatureCollection', features } },
-      reducer: fn('Reducer.mean', {}),
-      scale: c(config.geeScale),
-    })
-    const result = await geeCompute(token, expression) as { features?: Array<{ properties: Record<string, unknown> }> } | null
-    for (const feat of result?.features ?? []) {
-      const idx = feat.properties?._idx as number
-      if (typeof idx === 'number') bandsByIdx.set(idx, parseDWBands(feat.properties))
-    }
-    console.log(`[gee] validatePatches batch: ${bandsByIdx.size}/${work.length} results`)
-  } catch (err) {
-    console.warn('[gee] validatePatches batch failed, falling back to parallel:', (err as Error).message)
-    const fallback = await Promise.allSettled(
-      work.map(p => fetchDWBandsForPolygon({ type: 'Polygon', coordinates: p.polygon.coordinates as number[][][] }, token, config.geeScale))
-    )
-    fallback.forEach((r, i) => {
-      if (r.status === 'fulfilled') bandsByIdx.set(i, r.value)
-    })
-  }
+  const bandsByIdx: Map<number, DWBandValues> = new Map()
+  const bandResults = await Promise.allSettled(
+    work.map(p => fetchDWBandsForPolygon({ type: 'Polygon', coordinates: p.polygon.coordinates as number[][][] }, token, config.geeScale))
+  )
+  bandResults.forEach((r, i) => {
+    if (r.status === 'fulfilled') bandsByIdx.set(i, r.value)
+  })
 
   // Reverse geocoding in parallel (unchanged)
   const placeNames = await Promise.allSettled(

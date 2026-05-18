@@ -1,6 +1,27 @@
 const GEMMA_URL =
   'https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent'
 
+const GEMMA_PLANNER_URL =
+  'https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent'
+
+function getGemmaKey(index = 0): string {
+  const keys = [process.env.GEMMA_API_KEY, process.env.GEMMA_API_KEY_2].filter(Boolean) as string[]
+  return keys[index % keys.length]
+}
+
+// Parse retryDelay from a 429 response body (e.g. "10.3s" → 11300ms). Falls back to 12s.
+function parse429DelayMs(data: unknown): number {
+  try {
+    const details = ((data as Record<string, unknown>)?.error as Record<string, unknown>)
+      ?.details as Array<Record<string, unknown>> | undefined
+    const retryInfo = details?.find(d => d['@type'] === 'type.googleapis.com/google.rpc.RetryInfo')
+    const delayStr = retryInfo?.retryDelay as string | undefined
+    const match = delayStr?.match(/^(\d+(?:\.\d+)?)s$/)
+    if (match) return Math.ceil(parseFloat(match[1]) * 1000) + 1000
+  } catch { /* ignore */ }
+  return 12000
+}
+
 export interface GemmaResponse {
   analysis: string
   mode: 'planting' | 'alternative'
@@ -32,7 +53,12 @@ export async function callGemma(prompt: string, images?: GemmaImage[]): Promise<
 
     const data = await res.json()
 
-    // Retry on 500/503 — model is occasionally overloaded
+    if (res.status === 429 && attempt < 3) {
+      const delay = parse429DelayMs(data)
+      console.warn(`[gemma] callGemma 429 rate-limit, retrying in ${delay}ms (attempt ${attempt})`)
+      await new Promise(r => setTimeout(r, delay))
+      continue
+    }
     if ((res.status === 500 || res.status === 503) && attempt < 3) {
       await new Promise(r => setTimeout(r, attempt * 3000))
       continue
@@ -203,33 +229,67 @@ export async function translateForReport(
   const prompt = `You are a professional translator. Translate the text below into ${langName}.
 
 Rules:
-- Preserve every [TAG] and [/TAG] marker exactly — do not translate or modify tags.
-- Only translate the text between matching open/close tags.
-- Preserve all numbers, percentages, units (%, deg C, ha, km) and proper nouns exactly.
-- Output ONLY the translated tagged text. No thinking, no explanations, no "original -> translation" lines.
+- Preserve every [TAG] and [/TAG] marker exactly as-is — do not translate or alter the tag names.
+- Translate ALL text between matching open/close tags, including pipe-delimited values like "native | fast | large".
+- Preserve species scientific names (in parentheses), all numbers, percentages, and units (%, °C, ha, km) exactly.
+- Output ONLY the translated tagged text. No preamble, no explanations, no "original -> translation" lines.
 
 Text:
 ${text}`
 
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.1, maxOutputTokens: 4096 }
-        })
+  const keys = [apiKey, process.env.GEMMA_API_KEY_2].filter(Boolean) as string[]
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const key = keys[(attempt - 1) % keys.length]
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent?key=${key}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.1, maxOutputTokens: 8192 },
+          }),
+          signal: AbortSignal.timeout(60_000),
+        }
+      )
+      const data = await res.json()
+
+      if (res.status === 429 && attempt < 3) {
+        const delay = parse429DelayMs(data)
+        console.warn(`[gemma] translateForReport 429, retrying in ${delay}ms (attempt ${attempt})`)
+        await new Promise(r => setTimeout(r, delay))
+        continue
       }
-    )
-    const data = await res.json()
-    const rParts: Array<Record<string, unknown>> = data?.candidates?.[0]?.content?.parts ?? []
-    const raw: string = extractOutputText(rParts)
-    return stripTranslationCoT(raw) || text
-  } catch {
-    return text
+      if ((res.status === 500 || res.status === 503) && attempt < 3) {
+        console.warn(`[gemma] translateForReport ${res.status}, retrying (attempt ${attempt})`)
+        await new Promise(r => setTimeout(r, attempt * 2000))
+        continue
+      }
+      if (!res.ok) {
+        console.error('[gemma] translateForReport error', res.status, JSON.stringify(data).slice(0, 300))
+        return text
+      }
+
+      const rParts: Array<Record<string, unknown>> = data?.candidates?.[0]?.content?.parts ?? []
+      console.log('[gemma] translateForReport parts:', rParts.length, '| thought:', rParts.filter(p => p.thought).length)
+      const raw: string = extractOutputText(rParts)
+      console.log('[gemma] translateForReport raw (first 300):', raw.slice(0, 300))
+      if (!raw) {
+        console.warn('[gemma] translateForReport: empty output on attempt', attempt)
+        if (attempt < 3) continue
+        return text
+      }
+      const result = stripTranslationCoT(raw) || text
+      console.log('[gemma] translateForReport result (first 200):', result.slice(0, 200))
+      return result
+    } catch (err) {
+      console.error(`[gemma] translateForReport exception (attempt ${attempt}):`, err)
+      if (attempt === 3) return text
+    }
   }
+  return text
 }
 
 // Internal: raw API call for structured outputs — no chain-of-thought stripping, lower temperature
@@ -249,6 +309,12 @@ async function callGemmaStructured(prompt: string, images: GemmaImage[]): Promis
       body,
     })
     const data = await res.json()
+    if (res.status === 429 && attempt < 3) {
+      const delay = parse429DelayMs(data)
+      console.warn(`[gemma] 429 rate-limit, retrying in ${delay}ms (attempt ${attempt})`)
+      await new Promise(r => setTimeout(r, delay))
+      continue
+    }
     if (res.status === 500 && attempt < 3) {
       await new Promise(r => setTimeout(r, attempt * 1500))
       continue
@@ -481,6 +547,7 @@ export async function runAgentCritic(
   images: GemmaImage[],
   district: string,
   cityName: string,
+  keyIndex = 0,
 ): Promise<AgentCritique[]> {
   if (patches.length === 0) return []
 
@@ -531,11 +598,17 @@ For each site return one JSON object with these exact keys: site_id, verdict, mc
     const timer = setTimeout(() => abort.abort(), 45_000)
     let res: Response
     try {
-      res = await fetch(`${GEMMA_URL}?key=${process.env.GEMMA_API_KEY}`, {
+      res = await fetch(`${GEMMA_URL}?key=${getGemmaKey(keyIndex)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body, signal: abort.signal,
       })
     } finally { clearTimeout(timer) }
     const data = await res.json()
+    if (res.status === 429 && attempt < 3) {
+      const delay = parse429DelayMs(data)
+      console.warn(`[gemma] 429 rate-limit, retrying in ${delay}ms (attempt ${attempt})`)
+      await new Promise(r => setTimeout(r, delay))
+      continue
+    }
     if (res.status === 500 && attempt < 3) {
       await new Promise(r => setTimeout(r, attempt * 1500))
       continue
@@ -632,11 +705,11 @@ export async function runAgentPlanner(
   district: string,
   cityName: string,
   language?: string,
+  keyIndex = 0,
 ): Promise<AgentPlan[]> {
   const approved = patches.filter(p => validations.find(v => v.site_id === p.id)?.passed === true)
   if (approved.length === 0) return []
 
-  const n = approved.length
   const langName = language && language !== 'en' ? (LANGUAGE_NAMES[language] ?? language) : null
   const langInstruction = langName
     ? `CRITICAL: Respond entirely in ${langName}. Species names should use common ${langName} names where they exist, with Latin names in parentheses. The "reasoning" field must also be in ${langName}.\n\n`
@@ -673,14 +746,20 @@ Recommend 3-5 species per site suited to ${cityName}'s climate.`
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     const abort = new AbortController()
-    const timer = setTimeout(() => abort.abort(), 45_000)
+    const timer = setTimeout(() => abort.abort(), 90_000)
     let res: Response
     try {
-      res = await fetch(`${GEMMA_URL}?key=${process.env.GEMMA_API_KEY}`, {
+      res = await fetch(`${GEMMA_PLANNER_URL}?key=${getGemmaKey(keyIndex)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body, signal: abort.signal,
       })
     } finally { clearTimeout(timer) }
     const data = await res.json()
+    if (res.status === 429 && attempt < 3) {
+      const delay = parse429DelayMs(data)
+      console.warn(`[gemma] 429 rate-limit, retrying in ${delay}ms (attempt ${attempt})`)
+      await new Promise(r => setTimeout(r, delay))
+      continue
+    }
     if (res.status === 500 && attempt < 3) {
       await new Promise(r => setTimeout(r, attempt * 1500))
       continue

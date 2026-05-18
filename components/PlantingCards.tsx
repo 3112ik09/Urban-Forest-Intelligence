@@ -110,7 +110,7 @@ export default function PlantingCards({ result, onZoneClick }: Props) {
 
             {zone._species && zone._species.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginBottom: '6px' }}>
-                {zone._species.slice(0, 4).map(s => {
+                {zone._species.slice(0, 2).map(s => {
                   const typeBg  = s.type === 'native' ? '#dcfce7' : s.type === 'adaptive' ? '#fef3c7' : '#f3f4f6'
                   const typeClr = s.type === 'native' ? '#166534' : s.type === 'adaptive' ? '#92400e' : '#6b7280'
                   return (

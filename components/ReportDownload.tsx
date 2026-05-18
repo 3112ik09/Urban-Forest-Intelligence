@@ -26,6 +26,8 @@ type PdfLabel = {
   noZonesText: string
   roadNetwork: string; rooftops: string; facades: string
   parkingLots: string; imperviousSurface: string; nativeSpecies: string
+  trees: string; people: string; co2Unit: string; costUnit: string
+  growthLabel: string; canopyLabel: string; generated: string
   evidenceTemplates: Record<string, string>
   zoneTypes: {
     ground_planting_open: string; ground_planting_median: string
@@ -53,6 +55,9 @@ const PDF_LABELS: Record<string, PdfLabel> = {
     facades: 'suitable facades', parkingLots: 'parking lots',
     imperviousSurface: 'impervious surface',
     nativeSpecies: 'Native species — suitable for local climate',
+    trees: 'trees', people: 'people', co2Unit: 't CO₂/10yr',
+    costUnit: 'est.', growthLabel: 'growth', canopyLabel: 'canopy',
+    generated: 'Generated',
     evidenceTemplates: {
       road_corridors_osm: '{km} km of road corridors suitable for median or verge planting',
       road_network_overlay: '{km}km road network — permeable overlay viable on residential streets',
@@ -103,6 +108,9 @@ const PDF_LABELS: Record<string, PdfLabel> = {
     facades: 'façades adaptées', parkingLots: 'parkings',
     imperviousSurface: 'surface imperméable',
     nativeSpecies: 'Espèces indigènes — adaptées au climat local',
+    trees: 'arbres', people: 'personnes', co2Unit: 't CO₂/10 ans',
+    costUnit: 'est.', growthLabel: 'croissance', canopyLabel: 'canopée',
+    generated: 'Généré',
     evidenceTemplates: {
       road_corridors_osm: '{km} km de corridors routiers aptes à la plantation en terre-plein ou accotement',
       road_network_overlay: '{km} km de réseau routier — revêtement permeable viable sur les rues résidentielles',
@@ -153,6 +161,9 @@ const PDF_LABELS: Record<string, PdfLabel> = {
     facades: 'fachadas adecuadas', parkingLots: 'aparcamientos',
     imperviousSurface: 'superficie impermeable',
     nativeSpecies: 'Especies nativas — adecuadas al clima local',
+    trees: 'árboles', people: 'personas', co2Unit: 't CO₂/10 años',
+    costUnit: 'est.', growthLabel: 'crecimiento', canopyLabel: 'dosel',
+    generated: 'Generado',
     evidenceTemplates: {
       road_corridors_osm: '{km} km de corredores viales aptos para plantación en mediana o arcén',
       road_network_overlay: '{km} km de red vial — pavimento permeable viable en calles residenciales',
@@ -203,6 +214,9 @@ const PDF_LABELS: Record<string, PdfLabel> = {
     facades: 'geeignete Fassaden', parkingLots: 'Parkplätze',
     imperviousSurface: 'versiegelte Fläche',
     nativeSpecies: 'Heimische Arten — standortgerecht',
+    trees: 'Bäume', people: 'Personen', co2Unit: 't CO₂/10 J.',
+    costUnit: 'gesch.', growthLabel: 'Wachstum', canopyLabel: 'Kronendach',
+    generated: 'Erstellt',
     evidenceTemplates: {
       road_corridors_osm: '{km} km Straßenkorridore für Median- oder Randstreifenbepflanzung',
       road_network_overlay: '{km} km Straßennetz — wasserdurchlässiger Belag auf Wohnstraßen möglich',
@@ -253,6 +267,9 @@ const PDF_LABELS: Record<string, PdfLabel> = {
     facades: 'upyukt divaren', parkingLots: 'parking sthal',
     imperviousSurface: 'abhedy satah',
     nativeSpecies: 'Sthaniy Prjaatiyan — sthanaiy jalvayu ke anurup',
+    trees: 'vriksh', people: 'log', co2Unit: 't CO2/10 varsh',
+    costUnit: 'anumaan', growthLabel: 'vriddhi', canopyLabel: 'chhatra',
+    generated: 'Nirmit',
     evidenceTemplates: {
       road_corridors_osm: '{km} km sadak corridor median ya kine mein ropan ke liye upyukt',
       road_network_overlay: '{km} km sadak netwerk — niwasi sadakon par permeable covering sambhav',
@@ -568,7 +585,7 @@ async function generatePDF(
   doc.setTextColor(107, 114, 128)
   doc.text(`${langLabel}  |  Gemma 4 + Earth Engine`, M, 36)
   doc.text(
-    `Generated: ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}`,
+    `${t.generated}: ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}`,
     M, 42,
   )
 
@@ -673,7 +690,7 @@ async function generatePDF(
       doc.setFontSize(9)
       doc.setTextColor(75, 85, 99)
       doc.text(
-        `${z.estimated_trees.toLocaleString()} trees — ${t.cooling} ${z.cooling_impact}` +
+        `${z.estimated_trees.toLocaleString()} ${t.trees} — ${t.cooling} ${z.cooling_impact}` +
         (z.place_name ? `  |  ${z.place_name}` : ''),
         M, y,
       )
@@ -682,13 +699,13 @@ async function generatePDF(
       drawBar(doc, M, y, CW * 0.55, z.estimated_trees, maxTrees, 22, 163, 74, 4)
       doc.setFontSize(7.5)
       doc.setTextColor(107, 114, 128)
-      doc.text(`${z.estimated_trees.toLocaleString()} trees`, M + CW * 0.55 + 3, y + 3)
+      doc.text(`${z.estimated_trees.toLocaleString()} ${t.trees}`, M + CW * 0.55 + 3, y + 3)
       y += 8
 
       const metricParts: string[] = []
-      if (z._carbon_10yr != null) metricParts.push(`CO2 ~${z._carbon_10yr.toFixed(0)} t/10yr`)
-      if (z._people_impacted != null) metricParts.push(`~${z._people_impacted.toLocaleString()} people`)
-      if (z._cost_inr != null) metricParts.push(`INR ${(Math.round(z._cost_inr / 100000 * 10) / 10).toFixed(1)}L est.`)
+      if (z._carbon_10yr != null) metricParts.push(`CO2 ~${z._carbon_10yr.toFixed(0)} ${t.co2Unit}`)
+      if (z._people_impacted != null) metricParts.push(`~${z._people_impacted.toLocaleString()} ${t.people}`)
+      if (z._cost_inr != null) metricParts.push(`INR ${(Math.round(z._cost_inr / 100000 * 10) / 10).toFixed(1)}L ${t.costUnit}`)
       if (metricParts.length > 0) {
         doc.setFontSize(8.5)
         doc.setFont('helvetica', 'normal')
@@ -753,7 +770,7 @@ async function generatePDF(
           doc.setFont('helvetica', 'normal')
           doc.setFontSize(8)
           doc.setTextColor(107, 114, 128)
-          doc.text(`  ${spType} · ${spGrowth} growth · ${spCanopy} canopy`, M + 2, y)
+          doc.text(`  ${spType} · ${spGrowth} ${t.growthLabel} · ${spCanopy} ${t.canopyLabel}`, M + 2, y)
           y += 4
           // Why line
           if (spWhy) {

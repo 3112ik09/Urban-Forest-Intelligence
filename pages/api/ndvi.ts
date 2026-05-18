@@ -107,8 +107,6 @@ async function fetchRestrictedPolygons(bbox: [number, number, number, number]): 
   }
 }
 
-// Survives across requests within the same serverless instance
-const serverCache = new Map<string, NDVIResult>()
 
 export interface NDVIResult {
   district: string
@@ -149,15 +147,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const resolvedCityName = cityName ?? districtName
   const config = getCityConfig(resolvedCityName)
-
-  const cacheKey = `ndvi:v26:${resolvedCityName}:${districtName}`
-  const cached = serverCache.get(cacheKey)
-  if (cached) {
-    console.log('[ndvi] cache hit:', cacheKey)
-    writeChunk({ type: 'result', ...cached })
-    res.end()
-    return
-  }
 
   console.log('[ndvi] pipeline start:', districtName, 'city:', resolvedCityName)
 
@@ -367,7 +356,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     })),
   }
 
-  serverCache.set(cacheKey, result)
   emitStep(writeChunk, 7)
   writeChunk({ type: 'result', ...result })
   res.end()
@@ -620,13 +608,9 @@ function convertPlansToZones(
   return mapped
 }
 
-// ── buildZonesWithGemma — fully parallel per-site Agent 1 + Agent 2 ───────────
-// Each site gets its own Agent 1 call and its own Agent 2 call, all fired
-// simultaneously. This is faster than the old batch-of-3 approach because:
-//   - 1-image Gemma calls complete faster than 3-image calls
-//   - All N calls run in parallel rather than N/3 sequential pipelines
-// Expected latency: max(any one Agent1 call) + max(any one Agent2 call) ≈ 8s
-// vs old approach: max(batch_pipeline) ≈ 12s
+// ── buildZonesWithGemma — parallel Agent 1 + staggered parallel Agent 2 ──────
+// Agent 1: one call per site, all in parallel. Bottleneck = slowest single call.
+// Agent 2: up to 5 sites, 300ms stagger between starts to avoid rate-limiting.
 
 async function buildZonesWithGemma(
   patches: ValidatedPatch[],
@@ -672,23 +656,15 @@ async function buildZonesWithGemma(
     issues: [], positive_signals: [], reasoning: 'Agent 1 unavailable',
   })
 
-  const agent1Total = patchInputs.length
-  let agent1Done = 0
-
   if (onProgress) emitStep(onProgress, 4)
 
   const agent1Results = await Promise.allSettled(
-    patchInputs.map(async p => {
+    patchInputs.map(async (p, i) => {
       const img = tileMap.get(p.id)
       try {
-        const critiques = await runAgentCritic([p], img ? [img] : [], districtName, cityName)
-        const result = critiques[0] ?? fallbackCritique(p)
-        agent1Done++
-        onProgress?.({ type: 'image_progress', current: agent1Done, total: agent1Total, step: 4, stepLabel: STEP_LABELS[4] })
-        return result
+        const critiques = await runAgentCritic([p], img ? [img] : [], districtName, cityName, i)
+        return critiques[0] ?? fallbackCritique(p)
       } catch {
-        agent1Done++
-        onProgress?.({ type: 'image_progress', current: agent1Done, total: agent1Total, step: 4, stepLabel: STEP_LABELS[4] })
         return fallbackCritique(p)
       }
     })
@@ -714,7 +690,7 @@ async function buildZonesWithGemma(
     return { zones: buildZonesMCDA(patches, config), satelliteImageUsed: false }
   }
 
-  // ── Agent 2 — one call per approved site, all in parallel ─────────────────
+  // ── Agent 2 — sequential calls, up to 5 approved sites ────────────────────
   if (onProgress) emitStep(onProgress, 6)
   const fallbackPlan = (p: PatchInput, i: number): AgentPlan => {
     const plantableHa = Math.min(p.areaHa * 0.70, 40)
@@ -732,26 +708,32 @@ async function buildZonesWithGemma(
     }
   }
 
-  // Only run Agent 2 for the top 3 patches — lower-ranked ones get formula fallback
-  const agent2Candidates = approved.slice(0, 3)
+  const agent2Sites = approved.slice(0, 5)
   const agent2Results = await Promise.allSettled(
     approved.map(async (p, i) => {
-      if (!agent2Candidates.includes(p)) return fallbackPlan(p, i)
+      if (!agent2Sites.includes(p)) return fallbackPlan(p, i)
+      // Stagger 400ms per slot — slot 0 also waits so none fire simultaneously
+      await new Promise(r => setTimeout(r, i * 400))
       try {
         const plans = await runAgentPlanner(
-          [p], allCritiques, validations, [], districtName, cityName, language,
+          [p], allCritiques, validations, [], districtName, cityName, language, i,
         )
-        return plans[0] ?? fallbackPlan(p, i)
-      } catch {
+        if (!plans[0]) {
+          console.warn(`[ndvi] Agent 2 slot ${i} (${p.id}): runAgentPlanner returned empty — using fallback`)
+          return fallbackPlan(p, i)
+        }
+        console.log(`[ndvi] Agent 2 slot ${i} (${p.id}): OK — ${plans[0].species?.length ?? 0} species`)
+        return plans[0]
+      } catch (err) {
+        console.warn(`[ndvi] Agent 2 slot ${i} (${p.id}) threw:`, (err as Error).message)
         return fallbackPlan(p, i)
       }
     })
   )
-
   const allPlans: AgentPlan[] = agent2Results.map((r, i) =>
     r.status === 'fulfilled' ? r.value : fallbackPlan(approved[i], i)
   )
-  console.log(`[ndvi] Agent 2 (${approved.length} parallel calls): ${allPlans.filter(p => p.plantable).length} plans`)
+  console.log(`[ndvi] Agent 2 (${agent2Sites.length} parallel calls): ${allPlans.filter(p => p.plantable).length} plans`)
 
   // Re-rank globally by MCDA score
   const patchScoreMap = new Map(topCandidates.map(p => [p.id, p]))

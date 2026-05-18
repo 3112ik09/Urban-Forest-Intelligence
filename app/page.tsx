@@ -310,7 +310,7 @@ export default function Home() {
       {/* City search bar */}
       <div style={{
         background: 'white', borderBottom: '1px solid #e5e7eb',
-        padding: '10px 16px', display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0,
+        padding: '0.75rem 1.5rem', display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0,
       }}>
         <input
           type="text"

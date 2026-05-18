@@ -1,3 +1,6 @@
+'use client'
+import { IconTrees, IconSparkles } from '@tabler/icons-react'
+
 interface Props {
   ndviData: Record<string, number>
   cityName?: string
@@ -14,43 +17,79 @@ export default function HeroStats({ ndviData, cityName, totalDistricts }: Props)
       ? `of ${totalDistricts} total`
       : 'analysed'
 
-  return (
-    <div style={{
-      background: 'white', borderBottom: '1px solid #e5e7eb',
-      padding: '10px 16px 8px', flexShrink: 0,
-    }}>
-      {/* Row 1 — Brand */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
-        <span style={{ fontSize: '22px', fontWeight: 700, color: '#111827', whiteSpace: 'nowrap', letterSpacing: '-0.3px' }}>
-          Urban Forest Intelligence
-        </span>
-        <span style={{
-          fontSize: '10px', background: '#dcfce7', color: '#166534',
-          padding: '2px 8px', borderRadius: '20px', fontWeight: 500, whiteSpace: 'nowrap',
-        }}>
-          Gemma 4
-        </span>
-      </div>
+  const cards = [
+    { border: '#EF9F27', label: 'Heat gap',  value: '+5.8°C',         sub: 'low vs high canopy' },
+    { border: '#378ADD', label: 'Districts', value: totalDistricts && totalDistricts > 1 ? `${analysed} / ${totalDistricts}` : String(analysed), sub: districtSub },
+    { border: '#E24B4A', label: 'Critical',  value: String(hotZones), sub: 'canopy < 15%' },
+  ]
 
-      {/* Row 2 — Stats */}
-      <div style={{ display: 'flex', gap: '28px' }}>
-        {[
-          { label: 'Urban heat gap',      value: '+5.8°C', sub: 'low vs high canopy districts',       hot: false },
-          { label: 'Districts analysed',  value: String(analysed), sub: districtSub,                  hot: false },
-          { label: 'Critical heat zones', value: String(hotZones), sub: 'canopy below 15%',            hot: hotZones > 0 },
-        ].map(s => (
-          <div key={s.label}>
-            <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '1px' }}>{s.label}</div>
-            <div style={{
-              fontSize: '20px', fontWeight: 700, lineHeight: 1.1,
-              color: s.hot ? '#dc2626' : '#111827',
-            }}>
-              {s.value}
-            </div>
-            <div style={{ fontSize: '10px', color: '#9ca3af' }}>{s.sub}</div>
+  return (
+    <>
+      <style>{`
+        @media (max-width: 640px) {
+          .hero-stats-grid { grid-template-columns: repeat(2, 1fr) !important; }
+        }
+      `}</style>
+      <div style={{
+        background: 'white',
+        borderBottom: '0.5px solid #e5e7eb',
+        padding: '1rem 1.5rem',
+        flexShrink: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'flex-start',
+        gap: '24px',
+      }}>
+        {/* Left — title lockup */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: '0 0 auto' }}>
+          <IconTrees size={24} color="#3B6D11" stroke={1.75} />
+          <span style={{ fontSize: '26px', fontWeight: 700, color: '#111827', whiteSpace: 'nowrap', letterSpacing: '-0.4px' }}>
+            Urban Forest Intelligence
+          </span>
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', gap: '4px',
+            background: '#EAF3DE', color: '#3B6D11',
+            padding: '3px 9px', borderRadius: '20px',
+            fontSize: '10px', fontWeight: 500, whiteSpace: 'nowrap',
+          }}>
+            <IconSparkles size={11} stroke={2} />
+            Powered by Gemma 4
           </div>
-        ))}
+        </div>
+
+        {/* Right — stat cards */}
+        <div
+          className="hero-stats-grid"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3, 1fr)',
+            gap: '10px',
+            marginLeft: 'auto',
+          }}
+        >
+          {cards.map(card => (
+            <div
+              key={card.label}
+              style={{
+                background: '#f9fafb',
+                borderRadius: '8px',
+                padding: '10px 14px',
+                borderLeft: `3px solid ${card.border}`,
+              }}
+            >
+              <div style={{ fontSize: '11px', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '2px' }}>
+                {card.label}
+              </div>
+              <div style={{ fontSize: '22px', fontWeight: 500, color: '#111827', lineHeight: 1.1 }}>
+                {card.value}
+              </div>
+              <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '1px' }}>
+                {card.sub}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
+    </>
   )
 }
