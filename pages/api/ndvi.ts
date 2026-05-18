@@ -8,7 +8,7 @@ import {
   reRankZonesWithGemma,
   runAgentCritic, runSpatialValidator, runAgentPlanner,
   type VerifiedZone, type GemmaImage, type PatchInput,
-  type AgentCritique, type AgentPlan, type ValidationResult,
+  type AgentCritique, type AgentPlan, type ValidationResult, type AgentSpecies,
 } from '@/lib/gemma'
 import { getCityConfig } from '@/lib/cityRegistry'
 import type { CityConfig } from '@/lib/cityRegistry'
@@ -721,7 +721,7 @@ async function buildZonesWithGemma(
     const trees = Math.min(25000, Math.round(plantableHa * 650))
     return {
       site_id: p.id, final_rank: i + 1, plantable: true,
-      species: [{ name: 'Native species', why: 'suitable for local climate' }],
+      species: [{ name: 'Native species', local_name: 'Native species', why: 'suitable for local climate', type: 'native' as AgentSpecies['type'], growth_rate: 'medium' as AgentSpecies['growth_rate'], canopy: 'medium' as AgentSpecies['canopy'] }],
       planting_method: 'ground planting',
       estimated_trees: trees,
       temp_reduction_c: parseFloat(Math.min(2.5, plantableHa * 0.12).toFixed(1)),

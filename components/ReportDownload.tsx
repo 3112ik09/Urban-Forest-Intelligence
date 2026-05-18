@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { SUPPORTED_LANGUAGES, sanitiseGemmaOutput, type LangCode } from '@/lib/gemma'
 import type { NDVIResult } from '@/pages/api/ndvi'
-import type { GemmaResponse, VerifiedZone } from '@/lib/gemma'
+import type { GemmaResponse, VerifiedZone, AgentSpecies } from '@/lib/gemma'
 import { buildAlternativeStrategies, type AlternativeStrategy } from '@/lib/alternativeStrategies'
 
 type FullResult = NDVIResult & GemmaResponse
@@ -359,8 +359,6 @@ export default function ReportDownload({ district, result, language = 'en', onLa
 
 function buildTranslatableContent(result: FullResult): string {
   const zones = result.verified_zones ?? []
-  const altStrategies = buildAlternativeStrategies(result)
-
   // Only dynamic content goes through Gemma translation.
   // Static UI labels come from PDF_LABELS (pre-translated per language).
   const parts: string[] = [
@@ -373,8 +371,8 @@ function buildTranslatableContent(result: FullResult): string {
     parts.push(`[ZONE_TITLE_${n}]${z.planting_method} at ${typeLabel}[/ZONE_TITLE_${n}]`)
     parts.push(`[ZONE_REASONING_${n}]\n${z.gemma_reasoning}\n[/ZONE_REASONING_${n}]`)
     if (z._species?.length) {
-      z._species.forEach((sp, si) => {
-        parts.push(`[ZONE_SPECIES_${n}_${si + 1}]${sp.name} — ${sp.why}[/ZONE_SPECIES_${n}_${si + 1}]`)
+      z._species.forEach((sp: AgentSpecies, si) => {
+        parts.push(`[ZONE_SPECIES_${n}_${si + 1}]${sp.name} | ${sp.type ?? 'native'} | ${sp.growth_rate ?? 'medium'} | ${sp.canopy ?? 'medium'} | ${sp.why}[/ZONE_SPECIES_${n}_${si + 1}]`)
       })
     }
   })
@@ -411,8 +409,8 @@ function parseTranslatedSections(text: string, result: FullResult): TranslatedSe
       extractTag(text, `ZONE_REASONING_${i + 1}`, z.gemma_reasoning)
     ),
     zoneSpecies: zones.map((z, i) =>
-      (z._species ?? []).map((sp, si) =>
-        extractTag(text, `ZONE_SPECIES_${i + 1}_${si + 1}`, `${sp.name} — ${sp.why}`)
+      (z._species ?? []).map((sp: AgentSpecies, si) =>
+        extractTag(text, `ZONE_SPECIES_${i + 1}_${si + 1}`, `${sp.name} | ${sp.type ?? 'native'} | ${sp.growth_rate ?? 'medium'} | ${sp.canopy ?? 'medium'} | ${sp.why}`)
       )
     ),
   }
@@ -471,9 +469,13 @@ function getStrategyDescription(s: AlternativeStrategy, t: PdfLabel): string {
 
 function isAgentFallbackSpecies(sp: string): boolean {
   const l = sp.toLowerCase()
+  // Match only the exact fallback strings produced when Agent 2 fails.
+  // Do NOT add broad phrases like "suitable for local climate" — Gemma uses
+  // similar wording in legitimate species descriptions.
   return (
-    l.includes('native species') || l.includes('agent 2') ||
-    l.includes('unavailable') || l.includes('formula') ||
+    l.startsWith('native species') ||
+    l.includes('agent 2 unavailable') ||
+    l.includes('formula estimate') ||
     sp.trim().startsWith('"') || sp.trim().startsWith("'")
   )
 }
@@ -718,19 +720,52 @@ async function generatePDF(
         doc.setFont('helvetica', 'bold')
         doc.setTextColor(21, 128, 61)
         doc.text(`${t.species}:`, M, y)
-        y += 4.5
-        doc.setFont('helvetica', 'normal')
-        doc.setTextColor(55, 65, 81)
-        speciesList.forEach(sp => {
+        y += 5
+        speciesList.forEach((sp, si) => {
           y = addPageIfNeeded(doc, y, PH, M)
-          const spText = isAgentFallbackSpecies(sp)
-            ? t.nativeSpecies
-            : sp.replace(/^["']|["']$/g, '').trim()
-          const spLines = doc.splitTextToSize(`  ${spText}`, CW - 4) as string[]
+          if (isAgentFallbackSpecies(sp)) {
+            doc.setFont('helvetica', 'normal')
+            doc.setFontSize(8.5)
+            doc.setTextColor(107, 114, 128)
+            doc.text(`  ${t.nativeSpecies}`, M, y)
+            y += 5
+            return
+          }
+          // Parse pipe-delimited: name | type | growth_rate | canopy | why
+          const parts = sp.split('|').map(s => s.trim())
+          const spName    = parts[0] ?? sp
+          const spType    = (parts[1] ?? (zones[i]?._species?.[si] as AgentSpecies | undefined)?.type ?? 'native').toLowerCase()
+          const spGrowth  = parts[2] ?? (zones[i]?._species?.[si] as AgentSpecies | undefined)?.growth_rate ?? 'medium'
+          const spCanopy  = parts[3] ?? (zones[i]?._species?.[si] as AgentSpecies | undefined)?.canopy ?? 'medium'
+          const spWhy     = parts[4] ?? ''
+          // Name line — color by type
+          const nameColor: [number, number, number] =
+            spType === 'native'   ? [22, 163, 74] :
+            spType === 'adaptive' ? [217, 119, 6] :
+            [107, 114, 128]
           doc.setFontSize(8.5)
-          doc.text(spLines, M + 2, y)
-          y += spLines.length * 4.2
+          doc.setFont('helvetica', 'bold')
+          doc.setTextColor(...nameColor)
+          const nameLines = doc.splitTextToSize(spName.replace(/^["']|["']$/g, '').trim(), CW - 4) as string[]
+          doc.text(nameLines, M + 2, y)
+          y += nameLines.length * 4.2
+          // Metadata line
+          doc.setFont('helvetica', 'normal')
+          doc.setFontSize(8)
+          doc.setTextColor(107, 114, 128)
+          doc.text(`  ${spType} · ${spGrowth} growth · ${spCanopy} canopy`, M + 2, y)
+          y += 4
+          // Why line
+          if (spWhy) {
+            doc.setFontSize(8)
+            doc.setTextColor(107, 114, 128)
+            const whyLines = doc.splitTextToSize(`  ${spWhy}`, CW - 6) as string[]
+            doc.text(whyLines, M + 2, y)
+            y += whyLines.length * 3.8
+          }
+          y += 2
         })
+        y += 2
       }
 
       const reasoning = sections.zoneReasonings[i] || z.gemma_reasoning
@@ -772,7 +807,7 @@ async function generatePDF(
       p === 'high' ? t.priority.high :
         p === 'medium' ? t.priority.medium : t.priority.low
 
-    altStrategies.forEach((s, i) => {
+    altStrategies.forEach((s) => {
       y = addPageIfNeeded(doc, y, PH, M)
 
       // Reset font state before measuring — splitTextToSize uses current font metrics
@@ -783,7 +818,6 @@ async function generatePDF(
       const [r, g, b] = PRI_RGB[s.priority] ?? [107, 114, 128]
       const titleText = `${getStrategyTitle(s, t)}  [${priLabel(s.priority)}]`
       const descText = sanitisePdfText(getStrategyDescription(s, t))
-      const analysisText = sanitisePdfText(cleanAnalysis)
       const evidenceText = renderEvidence(s.evidenceKey, s.evidenceParams, t)
 
       // Measure with the correct font before rendering

@@ -78,6 +78,15 @@ function extractFinalParagraphs(raw: string): string {
   return final.length > 0 ? final.join('\n\n') : raw
 }
 
+export interface AgentSpecies {
+  name: string
+  local_name?: string
+  why: string
+  type: 'native' | 'adaptive' | 'exotic'
+  growth_rate: 'fast' | 'medium' | 'slow'
+  canopy: 'large' | 'medium' | 'small'
+}
+
 export interface VerifiedZone {
   rank: number
   site_type: 'open_ground' | 'road_median' | 'rooftop' |
@@ -90,7 +99,7 @@ export interface VerifiedZone {
   lat: number
   lon: number
   place_name?: string
-  _species?: Array<{ name: string; why: string }>
+  _species?: AgentSpecies[]
   _carbon_10yr?: number
   _people_impacted?: number
   _cost_inr?: number
@@ -133,7 +142,7 @@ export interface AgentPlan {
   site_id: string
   final_rank: number
   plantable: boolean
-  species: Array<{ name: string; why: string }>
+  species: AgentSpecies[]
   planting_method: string
   estimated_trees: number
   temp_reduction_c: number
@@ -619,31 +628,45 @@ export async function runAgentPlanner(
   const siteList = approved.map((p, i) => {
     const critique = critiques.find(c => c.site_id === p.id)
     const plantableHa = Math.min(p.areaHa * 0.70, 40)
+    const trees = Math.min(25000, Math.round(plantableHa * 650))
     return (
       `Site ${i + 1} (id: ${p.id}): ${p.placeName ?? p.siteType} — ` +
-      `${p.areaHa.toFixed(1)}ha total, ~${plantableHa.toFixed(1)}ha plantable, ` +
+      `${p.areaHa.toFixed(1)}ha total, plantable_ha=${plantableHa.toFixed(1)}, estimated_trees=${trees}, ` +
       `Agent 1: "${critique?.reasoning ?? 'approved'}", adjusted_score: ${critique?.adjusted_score ?? p.mcdaScore ?? 50}` +
       (critique?.issues?.length ? `, issues: ${critique.issues.join(', ')}` : '') +
       (critique?.positive_signals?.length ? `, positives: ${critique.positive_signals.join(', ')}` : '')
     )
   }).join('\n')
 
-  const prompt = `${langInstruction}Urban Forest Planner for ${district}, ${cityName}. Satellite images of ${n} approved planting sites are attached.
+  const prompt = `${langInstruction}You are an urban forest planner for ${district}, ${cityName}. Satellite images of ${n} approved planting sites are attached (one tile per site, in order).
 
-Sites:
+Sites (use the pre-computed values exactly — do not recalculate):
 ${siteList}
 
-For each site output one JSON object. Species must be native/suitable to ${cityName}'s actual climate zone — use your knowledge of local flora.
+For each site produce one JSON object. Use estimated_trees from the site data. Compute:
+  temp_reduction_c = min(2.5, plantable_ha * 0.12)
+  carbon_10yr_tons = estimated_trees * 0.025
+  people_impacted  = plantable_ha * 150
+  cost_estimate_inr = estimated_trees * 450
 
-Formulas: estimated_trees=plantableHa*650(max 25000), temp_reduction_c=plantableHa*0.12(max 2.5), carbon_10yr_tons=estimated_trees*0.025, people_impacted=plantableHa*150, cost_estimate_inr=estimated_trees*450.
+Species: recommend 3 to 5 species suited to ${cityName}'s climate and the specific site conditions.
+For each species return ALL of these fields:
+  name        — "Common Name (Botanical name)" e.g. "Neem (Azadirachta indica)"
+  local_name  — common name only e.g. "Neem"
+  why         — one sentence: why this species suits THIS site (mention heat tolerance, drought, soil type, shade, or pollution tolerance)
+  type        — "native" if indigenous to this region, "adaptive" if non-native but well-established, "exotic" otherwise
+  growth_rate — "fast", "medium", or "slow"
+  canopy      — "large", "medium", or "small"
 
-Output a JSON array only — no text before or after:
-[{"site_id":"...","final_rank":1,"plantable":true,"species":[{"name":"...","why":"..."},{"name":"...","why":"..."}],"planting_method":"...","estimated_trees":0,"temp_reduction_c":0,"carbon_10yr_tons":0,"people_impacted":0,"cost_estimate_inr":0,"reasoning":"..."}]`
+Rank sites 1 = best (highest adjusted_score wins ties).
+
+Output ONLY a valid JSON array — no prose, no markdown, no explanation:
+[{"site_id":"...","final_rank":1,"plantable":true,"species":[{"name":"...","local_name":"...","why":"...","type":"native","growth_rate":"fast","canopy":"large"}],"planting_method":"...","estimated_trees":0,"temp_reduction_c":0.0,"carbon_10yr_tons":0.0,"people_impacted":0,"cost_estimate_inr":0,"reasoning":"one sentence"}]`
 
   const imageParts = images.map(img => ({ inlineData: { mimeType: img.mimeType, data: img.base64 } }))
   const body = JSON.stringify({
     contents: [{ parts: [...imageParts, { text: prompt }] }],
-    generationConfig: { temperature: 0.2, maxOutputTokens: 4096, responseMimeType: 'application/json' },
+    generationConfig: { temperature: 0.2, maxOutputTokens: 4096 },
   })
 
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -674,7 +697,7 @@ Output a JSON array only — no text before or after:
       site_id: p.id,
       final_rank: i + 1,
       plantable: true,
-      species: [{ name: 'Native species', why: 'suitable for local climate' }],
+      species: [{ name: 'Native species', local_name: 'Native species', why: 'suitable for local climate', type: 'native' as const, growth_rate: 'medium' as const, canopy: 'medium' as const }],
       planting_method: 'ground planting',
       estimated_trees: trees,
       temp_reduction_c: parseFloat(Math.min(2.5, plantableHa * 0.12).toFixed(1)),

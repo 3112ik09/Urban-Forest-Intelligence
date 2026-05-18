@@ -304,7 +304,7 @@ export async function debugZoneSelection(
     const trees = Math.min(25000, Math.round(plantableHa * 650))
     return {
       site_id: p.id, final_rank: i + 1, plantable: true,
-      species: [{ name: 'Native species', why: 'suitable for local climate' }],
+      species: [{ name: 'Native species', local_name: 'Native species', why: 'suitable for local climate', type: 'native' as const, growth_rate: 'medium' as const, canopy: 'medium' as const }],
       planting_method: 'ground planting',
       estimated_trees: trees,
       temp_reduction_c: parseFloat(Math.min(2.5, plantableHa * 0.12).toFixed(1)),

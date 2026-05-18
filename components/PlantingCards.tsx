@@ -109,13 +109,28 @@ export default function PlantingCards({ result, onZoneClick }: Props) {
             </div>
 
             {zone._species && zone._species.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '5px' }}>
-                {zone._species.slice(0, 3).map(s => (
-                  <span key={s.name} style={{
-                    fontSize: '10px', background: '#dcfce7', color: '#166534',
-                    padding: '1px 7px', borderRadius: '10px', fontWeight: 500,
-                  }}>{s.name}</span>
-                ))}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginBottom: '6px' }}>
+                {zone._species.slice(0, 4).map(s => {
+                  const typeBg  = s.type === 'native' ? '#dcfce7' : s.type === 'adaptive' ? '#fef3c7' : '#f3f4f6'
+                  const typeClr = s.type === 'native' ? '#166534' : s.type === 'adaptive' ? '#92400e' : '#6b7280'
+                  return (
+                    <div key={s.name} style={{
+                      background: '#f9fafb', borderRadius: '6px',
+                      padding: '5px 8px', border: '1px solid #f3f4f6',
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '2px', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '11px', fontWeight: 600, color: '#111827' }}>{s.name}</span>
+                        <span style={{ fontSize: '9px', background: typeBg, color: typeClr, padding: '1px 5px', borderRadius: '8px', fontWeight: 500 }}>
+                          {s.type}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '10px', color: '#6b7280', marginBottom: '2px' }}>
+                        {s.growth_rate} growth · {s.canopy} canopy
+                      </div>
+                      <div style={{ fontSize: '10px', color: '#9ca3af', fontStyle: 'italic' }}>{s.why}</div>
+                    </div>
+                  )
+                })}
               </div>
             )}
 
