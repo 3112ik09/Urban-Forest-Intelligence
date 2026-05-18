@@ -32,18 +32,18 @@ export async function callGemma(prompt: string, images?: GemmaImage[]): Promise<
 
     const data = await res.json()
 
-    // Retry on 500 — model is occasionally overloaded
-    if (res.status === 500 && attempt < 3) {
-      await new Promise(r => setTimeout(r, attempt * 1500))
+    // Retry on 500/503 — model is occasionally overloaded
+    if ((res.status === 500 || res.status === 503) && attempt < 3) {
+      await new Promise(r => setTimeout(r, attempt * 3000))
       continue
     }
 
     if (!res.ok) throw new Error(`Gemma API error ${res.status}: ${JSON.stringify(data)}`)
 
-    const text: string | undefined =
-      data?.candidates?.[0]?.content?.parts?.[0]?.text
+    const parts: Array<Record<string, unknown>> = data?.candidates?.[0]?.content?.parts ?? []
+    const text = extractOutputText(parts)
     if (!text) throw new Error('Empty Gemma response')
-    return extractFinalParagraphs(text.trim())
+    return extractFinalParagraphs(text)
   }
 
   throw new Error('Gemma API failed after 3 attempts')
@@ -224,7 +224,8 @@ ${text}`
       }
     )
     const data = await res.json()
-    const raw: string = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+    const rParts: Array<Record<string, unknown>> = data?.candidates?.[0]?.content?.parts ?? []
+    const raw: string = extractOutputText(rParts)
     return stripTranslationCoT(raw) || text
   } catch {
     return text
@@ -253,9 +254,10 @@ async function callGemmaStructured(prompt: string, images: GemmaImage[]): Promis
       continue
     }
     if (!res.ok) throw new Error(`Gemma API error ${res.status}: ${JSON.stringify(data)}`)
-    const text: string | undefined = data?.candidates?.[0]?.content?.parts?.[0]?.text
+    const sParts: Array<Record<string, unknown>> = data?.candidates?.[0]?.content?.parts ?? []
+    const text = extractOutputText(sParts)
     if (!text) throw new Error('Empty Gemma response')
-    return text.trim()
+    return text
   }
   throw new Error('Gemma API failed after 3 attempts')
 }
@@ -415,6 +417,15 @@ Professional policy language. No bullet points. No headers. No asterisks. Plain 
   return { prompt, hasLand }
 }
 
+// Gemma 4 thinking model returns parts with {thought:true} for reasoning traces.
+// Only the non-thought parts contain the actual output (JSON for agents, prose for analysis).
+function extractOutputText(parts: Array<Record<string, unknown>>): string {
+  const outputParts = parts
+    .filter(p => !p.thought && typeof p.text === 'string')
+    .map(p => p.text as string)
+  return outputParts.join('\n').trim()
+}
+
 // Extracts a JSON array from Gemma output that may have chain-of-thought before/after.
 // Gemma 4 puts CoT first then the JSON; the array is always the LAST well-formed JSON
 // structure in the output. We scan backward from the last ']', tracking bracket depth
@@ -507,9 +518,7 @@ For sites marked [UNKNOWN TYPE — infer from image]:
   Deduce the most likely land use (vacant lot, road median, parking area, brownfield, etc.) and set inferred_site_type accordingly.
   Use that inferred type to decide verdict and adjusted_score, not the "unknown" label.
 
-Return ONLY a valid JSON array. No prose, no markdown fences.
-Each element must have exactly these keys:
-{"site_id":"<id string>","verdict":"approve"|"review"|"reject","mcda_score":<number>,"visual_confidence":<0-1>,"adjusted_score":<0-100>,"issues":["..."],"positive_signals":["..."],"reasoning":"<one sentence>","inferred_site_type":"<only for unknown sites, else omit>"}`
+For each site return one JSON object with these exact keys: site_id, verdict, mcda_score, visual_confidence, adjusted_score, issues (array of strings), positive_signals (array of strings), reasoning (one sentence). Include inferred_site_type only for unknown sites.`
 
   const imageParts = images.map(img => ({ inlineData: { mimeType: img.mimeType, data: img.base64 } }))
   const body = JSON.stringify({
@@ -518,20 +527,28 @@ Each element must have exactly these keys:
   })
 
   for (let attempt = 1; attempt <= 3; attempt++) {
-    const res = await fetch(`${GEMMA_URL}?key=${process.env.GEMMA_API_KEY}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    })
+    const abort = new AbortController()
+    const timer = setTimeout(() => abort.abort(), 45_000)
+    let res: Response
+    try {
+      res = await fetch(`${GEMMA_URL}?key=${process.env.GEMMA_API_KEY}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body, signal: abort.signal,
+      })
+    } finally { clearTimeout(timer) }
     const data = await res.json()
     if (res.status === 500 && attempt < 3) {
       await new Promise(r => setTimeout(r, attempt * 1500))
       continue
     }
     if (!res.ok) throw new Error(`Gemma API error ${res.status}: ${JSON.stringify(data)}`)
-    const text: string | undefined = data?.candidates?.[0]?.content?.parts?.[0]?.text
+    const parts: Array<Record<string, unknown>> = data?.candidates?.[0]?.content?.parts ?? []
+    const text = extractOutputText(parts)
     if (!text) throw new Error('Empty Gemma response')
 
+    try {
+      const parsed = JSON.parse(text)
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed as AgentCritique[]
+    } catch { /* fall through to extractJsonArray */ }
     const parsed = extractJsonArray<AgentCritique>(text)
     if (parsed) return parsed
     console.warn('[gemma] Agent 1 JSON extraction failed, raw:\n', text.slice(0, 600))
@@ -584,10 +601,10 @@ export function runSpatialValidator(
 
     if (verdict === 'reject') {
       passed = false
-    } else if (verdict === 'approve' && compactness < 0.10) {
+    } else if (verdict === 'approve' && compactness < 0.01) {
       passed = false
       override_reason = 'shape too fragmented'
-    } else if (verdict === 'review' && adjustedScore > 50 && compactness >= 0.10) {
+    } else if (verdict === 'review' && adjustedScore > 50 && compactness >= 0.01) {
       passed = true
     } else if (verdict === 'review' && adjustedScore <= 50) {
       passed = false
@@ -638,30 +655,15 @@ export async function runAgentPlanner(
     )
   }).join('\n')
 
-  const prompt = `${langInstruction}You are an urban forest planner for ${district}, ${cityName}. Satellite images of ${n} approved planting sites are attached (one tile per site, in order).
+  const prompt = `${langInstruction}You are an urban forest planner for ${district}, ${cityName}.
 
-Sites (use the pre-computed values exactly — do not recalculate):
+Sites:
 ${siteList}
 
-For each site produce one JSON object. Use estimated_trees from the site data. Compute:
-  temp_reduction_c = min(2.5, plantable_ha * 0.12)
-  carbon_10yr_tons = estimated_trees * 0.025
-  people_impacted  = plantable_ha * 150
-  cost_estimate_inr = estimated_trees * 450
+Respond with ONLY a JSON array — no prose, no markdown fences. One element per site, using these exact field names:
+[{"site_id":"<id>","final_rank":<1=best>,"plantable":true,"planting_method":"<ground planting|street tree planting|etc>","estimated_trees":<copy from site>,"temp_reduction_c":<min(2.5,plantable_ha*0.12)>,"carbon_10yr_tons":<estimated_trees*0.025>,"people_impacted":<plantable_ha*150>,"cost_estimate_inr":<estimated_trees*450>,"reasoning":"<one sentence>","species":[{"name":"<Common (Botanical)>","local_name":"<common only>","why":"<why this site>","type":"<native|adaptive|exotic>","growth_rate":"<fast|medium|slow>","canopy":"<large|medium|small>"}]}]
 
-Species: recommend 3 to 5 species suited to ${cityName}'s climate and the specific site conditions.
-For each species return ALL of these fields:
-  name        — "Common Name (Botanical name)" e.g. "Neem (Azadirachta indica)"
-  local_name  — common name only e.g. "Neem"
-  why         — one sentence: why this species suits THIS site (mention heat tolerance, drought, soil type, shade, or pollution tolerance)
-  type        — "native" if indigenous to this region, "adaptive" if non-native but well-established, "exotic" otherwise
-  growth_rate — "fast", "medium", or "slow"
-  canopy      — "large", "medium", or "small"
-
-Rank sites 1 = best (highest adjusted_score wins ties).
-
-Output ONLY a valid JSON array — no prose, no markdown, no explanation:
-[{"site_id":"...","final_rank":1,"plantable":true,"species":[{"name":"...","local_name":"...","why":"...","type":"native","growth_rate":"fast","canopy":"large"}],"planting_method":"...","estimated_trees":0,"temp_reduction_c":0.0,"carbon_10yr_tons":0.0,"people_impacted":0,"cost_estimate_inr":0,"reasoning":"one sentence"}]`
+Recommend 3-5 species per site suited to ${cityName}'s climate.`
 
   const imageParts = images.map(img => ({ inlineData: { mimeType: img.mimeType, data: img.base64 } }))
   const body = JSON.stringify({
@@ -670,20 +672,30 @@ Output ONLY a valid JSON array — no prose, no markdown, no explanation:
   })
 
   for (let attempt = 1; attempt <= 3; attempt++) {
-    const res = await fetch(`${GEMMA_URL}?key=${process.env.GEMMA_API_KEY}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    })
+    const abort = new AbortController()
+    const timer = setTimeout(() => abort.abort(), 45_000)
+    let res: Response
+    try {
+      res = await fetch(`${GEMMA_URL}?key=${process.env.GEMMA_API_KEY}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body, signal: abort.signal,
+      })
+    } finally { clearTimeout(timer) }
     const data = await res.json()
     if (res.status === 500 && attempt < 3) {
       await new Promise(r => setTimeout(r, attempt * 1500))
       continue
     }
     if (!res.ok) throw new Error(`Gemma API error ${res.status}: ${JSON.stringify(data)}`)
-    const text: string | undefined = data?.candidates?.[0]?.content?.parts?.[0]?.text
+    const parts: Array<Record<string, unknown>> = data?.candidates?.[0]?.content?.parts ?? []
+    console.log('[gemma] Agent 2 raw parts count:', parts.length, '| thought parts:', parts.filter(p => p.thought).length)
+    const text = extractOutputText(parts)
     if (!text) throw new Error('Empty Gemma response')
+    console.log('[gemma] Agent 2 output text (first 300):', text.slice(0, 300))
 
+    try {
+      const parsed = JSON.parse(text)
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed as AgentPlan[]
+    } catch { /* fall through to extractJsonArray */ }
     const parsed = extractJsonArray<AgentPlan>(text)
     if (parsed) return parsed
     console.warn('[gemma] Agent 2 JSON extraction failed, raw:\n', text.slice(0, 600))

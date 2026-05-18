@@ -38,7 +38,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   console.log(`[analyse] zones: ${zones.length}, tile images fetched: ${images.length}`)
 
   try {
-    const analysis = await callGemma(prompt, images.length > 0 ? images : undefined)
+    let analysis: string
+    try {
+      analysis = await callGemma(prompt, images.length > 0 ? images : undefined)
+    } catch (imgErr) {
+      // Image payload may overload the model — retry text-only as fallback
+      console.warn('[analyse] Image call failed, retrying text-only:', (imgErr as Error).message)
+      analysis = await callGemma(prompt)
+    }
     const response: GemmaResponse = {
       analysis,
       mode: hasLand ? 'planting' : 'alternative',

@@ -150,7 +150,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const resolvedCityName = cityName ?? districtName
   const config = getCityConfig(resolvedCityName)
 
-  const cacheKey = `ndvi:v19:${resolvedCityName}:${districtName}`
+  const cacheKey = `ndvi:v26:${resolvedCityName}:${districtName}`
   const cached = serverCache.get(cacheKey)
   if (cached) {
     console.log('[ndvi] cache hit:', cacheKey)
@@ -643,7 +643,7 @@ async function buildZonesWithGemma(
   const topCandidates = [...mcda]
     .sort((a, b) => b.mcdaScore - a.mcdaScore)
     .slice(0, 10)
-    .filter(p => p.bands.built <= 0.45 && p.areaHa >= 0.5 && p.bands.water <= 0.15)
+    .filter(p => p.bands.built <= 0.60 && p.areaHa >= 0.2 && p.bands.water <= 0.15)
     .slice(0, 7)
 
   console.log(`[ndvi] Agent loop: ${topCandidates.length} candidates after pre-filter (from ${mcda.length} MCDA)`)
@@ -732,12 +732,14 @@ async function buildZonesWithGemma(
     }
   }
 
+  // Only run Agent 2 for the top 3 patches — lower-ranked ones get formula fallback
+  const agent2Candidates = approved.slice(0, 3)
   const agent2Results = await Promise.allSettled(
     approved.map(async (p, i) => {
-      const img = tileMap.get(p.id)
+      if (!agent2Candidates.includes(p)) return fallbackPlan(p, i)
       try {
         const plans = await runAgentPlanner(
-          [p], allCritiques, validations, img ? [img] : [], districtName, cityName, language,
+          [p], allCritiques, validations, [], districtName, cityName, language,
         )
         return plans[0] ?? fallbackPlan(p, i)
       } catch {

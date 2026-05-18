@@ -18,7 +18,18 @@ const fn = (name: string, args: Record<string, unknown>) => ({
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
+let _tokenCache: { token: string; expiresAt: number } | null = null
+
 export async function getGEEToken(): Promise<string> {
+  if (_tokenCache && _tokenCache.expiresAt > Date.now() + 60_000) {
+    return _tokenCache.token
+  }
+  const token = await _fetchGEEToken()
+  _tokenCache = { token, expiresAt: Date.now() + 55 * 60 * 1000 }
+  return token
+}
+
+async function _fetchGEEToken(): Promise<string> {
   const now = Math.floor(Date.now() / 1000)
   const claim = {
     iss: process.env.GEE_SERVICE_ACCOUNT,
@@ -151,7 +162,7 @@ async function geeCompute(token: string, expression: unknown): Promise<unknown> 
   }
 
   const body = JSON.stringify({ expression: wrapped })
-  console.log('[gee] geeCompute expression:', body.slice(0, 500))
+  console.log('[gee] geeCompute expression:', body.slice(0, 120), body.length > 120 ? `...(${body.length}b)` : '')
 
   const res = await fetch(url, {
     method: 'POST',
@@ -270,16 +281,37 @@ export async function fetchDWGrid(
     }
   }
 
-  const results = await Promise.allSettled(
-    cells.map(async cell => ({
-      ...cell,
-      bands: await fetchDWBands(bboxToRing(cell.cellBbox), token),
-    }))
-  )
-
-  return results
-    .filter((r): r is PromiseFulfilledResult<GridCell> => r.status === 'fulfilled')
-    .map(r => r.value)
+  // Single batched reduceRegions call instead of N parallel reduceRegion calls
+  try {
+    const features = cells.map((cell, i) => {
+      const [cMinLon, cMinLat, cMaxLon, cMaxLat] = cell.cellBbox
+      return {
+        type: 'Feature',
+        geometry: { type: 'Polygon', coordinates: [[[cMinLon, cMaxLat], [cMinLon, cMinLat], [cMaxLon, cMinLat], [cMaxLon, cMaxLat], [cMinLon, cMaxLat]]] },
+        properties: { _idx: i },
+      }
+    })
+    const expression = fn('Image.reduceRegions', {
+      input: buildDWAllBandsNode(),
+      collection: { constantValue: { type: 'FeatureCollection', features } },
+      reducer: fn('Reducer.mean', {}),
+      scale: c(100),
+    })
+    const result = await geeCompute(token, expression) as { features?: Array<{ properties: Record<string, unknown> }> } | null
+    const resultFeatures = result?.features ?? []
+    return cells.map((cell, i) => {
+      const feat = resultFeatures.find(f => (f.properties?._idx as number) === i)
+      return { ...cell, bands: parseDWBands(feat?.properties ?? {}) }
+    })
+  } catch (err) {
+    console.warn('[gee] fetchDWGrid batch failed, falling back to parallel:', (err as Error).message)
+    const results = await Promise.allSettled(
+      cells.map(async cell => ({ ...cell, bands: await fetchDWBands(bboxToRing(cell.cellBbox), token) }))
+    )
+    return results
+      .filter((r): r is PromiseFulfilledResult<GridCell> => r.status === 'fulfilled')
+      .map(r => r.value)
+  }
 }
 
 export async function fetchDWTwoPassGrid(
@@ -505,40 +537,50 @@ export async function validatePatches(
   token: string,
   config: CityConfig,
 ): Promise<ValidatedPatch[]> {
-  console.log(`[gee] validatePatches: validating ${patches.length} patches`)
+  const work = patches.slice(0, 20)
+  console.log(`[gee] validatePatches: validating ${work.length} patches`)
 
-  const results = await Promise.allSettled(
-    patches.slice(0, 20).map(async (patch): Promise<ValidatedPatch> => {
-      const polygon: GeoJSONPolygon = {
-        type: 'Polygon',
-        coordinates: patch.polygon.coordinates as number[][][],
-      }
-      const bands = await fetchDWBandsForPolygon(polygon, token, config.geeScale)
-      const siteType = inferSiteType(bands)
-      const placeName = await reverseGeocodeNominatim(patch.centroid.lat, patch.centroid.lon)
-      console.log(`[gee] patch ${patch.id}: ${siteType} | ${patch.areaHa.toFixed(1)}ha | ${placeName ?? 'unnamed'}`)
-      return {
-        ...patch,
-        bands,
-        siteType,
-        placeName: placeName ?? undefined,
-        canopyPct: Math.round((bands.trees + bands.shrub_and_scrub) * 100),
-        validated: true,
-      }
+  // Batch all band queries into a single reduceRegions call
+  let bandsByIdx: Map<number, DWBandValues> = new Map()
+  try {
+    const features = work.map((patch, i) => ({
+      type: 'Feature',
+      geometry: patch.polygon,
+      properties: { _idx: i },
+    }))
+    const expression = fn('Image.reduceRegions', {
+      input: buildDWAllBandsNode(),
+      collection: { constantValue: { type: 'FeatureCollection', features } },
+      reducer: fn('Reducer.mean', {}),
+      scale: c(config.geeScale),
     })
+    const result = await geeCompute(token, expression) as { features?: Array<{ properties: Record<string, unknown> }> } | null
+    for (const feat of result?.features ?? []) {
+      const idx = feat.properties?._idx as number
+      if (typeof idx === 'number') bandsByIdx.set(idx, parseDWBands(feat.properties))
+    }
+    console.log(`[gee] validatePatches batch: ${bandsByIdx.size}/${work.length} results`)
+  } catch (err) {
+    console.warn('[gee] validatePatches batch failed, falling back to parallel:', (err as Error).message)
+    const fallback = await Promise.allSettled(
+      work.map(p => fetchDWBandsForPolygon({ type: 'Polygon', coordinates: p.polygon.coordinates as number[][][] }, token, config.geeScale))
+    )
+    fallback.forEach((r, i) => {
+      if (r.status === 'fulfilled') bandsByIdx.set(i, r.value)
+    })
+  }
+
+  // Reverse geocoding in parallel (unchanged)
+  const placeNames = await Promise.allSettled(
+    work.map(p => reverseGeocodeNominatim(p.centroid.lat, p.centroid.lon))
   )
 
-  return results.map((r, i) => {
-    if (r.status === 'fulfilled') return r.value
-    console.error(`[gee] validatePatches patch ${i} failed:`, (r.reason as Error)?.message)
-    return {
-      ...patches[i],
-      bands: { trees: 0, grass: 0, bare: 0, built: 0, water: 0, shrub_and_scrub: 0 },
-      siteType: 'unknown' as SiteType,
-      placeName: undefined,
-      canopyPct: 0,
-      validated: false,
-    }
+  return work.map((patch, i) => {
+    const bands = bandsByIdx.get(i) ?? { trees: 0, grass: 0, bare: 0, built: 0, water: 0, shrub_and_scrub: 0 }
+    const siteType = inferSiteType(bands)
+    const placeName = placeNames[i].status === 'fulfilled' ? (placeNames[i] as PromiseFulfilledResult<string | null>).value ?? undefined : undefined
+    console.log(`[gee] patch ${patch.id}: ${siteType} | ${patch.areaHa.toFixed(1)}ha | ${placeName ?? 'unnamed'}`)
+    return { ...patch, bands, siteType, placeName, canopyPct: Math.round((bands.trees + bands.shrub_and_scrub) * 100), validated: true }
   })
 }
 
