@@ -1,6 +1,6 @@
 'use client'
 import { useState } from 'react'
-import { SUPPORTED_LANGUAGES, sanitiseGemmaOutput, type LangCode } from '@/lib/gemma'
+import { SUPPORTED_LANGUAGES, type LangCode } from '@/lib/gemma'
 import type { NDVIResult } from '@/pages/api/ndvi'
 import type { GemmaResponse, VerifiedZone, AgentSpecies } from '@/lib/gemma'
 import { buildAlternativeStrategies, type AlternativeStrategy } from '@/lib/alternativeStrategies'
@@ -312,9 +312,12 @@ export default function ReportDownload({ district, result, language = 'en', onLa
     setStatus(language === 'en' ? 'building' : 'translating')
     try {
       const tagged = buildTranslatableContent(result)
+      console.log('[PDF] SENDING TO TRANSLATE:\n', tagged)
       const translatedTagged = language === 'en' ? tagged : await fetchTranslation(tagged, language)
+      console.log('[PDF] RECEIVED FROM TRANSLATE:\n', translatedTagged)
       setStatus('building')
       const sections = parseTranslatedSections(translatedTagged, result)
+      console.log('[PDF] PARSED SECTIONS:', sections)
       await generatePDF(district, result, sections, language)
     } finally {
       setStatus('idle')
@@ -649,12 +652,9 @@ async function generatePDF(
   y = divider(doc, M, y, CW)
   y = sectionHeading(doc, t.analysis, M, y)
 
-  const cleanAnalysis = sanitiseGemmaOutput(sections.analysis)
-  const analysisText = cleanAnalysis.length > 30
-    ? cleanAnalysis
-    : sections.analysis.length > 30
-      ? sections.analysis
-      : result.analysis || '[Analysis unavailable for this district]'
+  const analysisText = sections.analysis.length > 30
+    ? sections.analysis
+    : result.analysis || '[Analysis unavailable for this district]'
   doc.setFontSize(9.5)
   doc.setFont('helvetica', 'normal')
   doc.setTextColor(55, 65, 81)

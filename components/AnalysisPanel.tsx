@@ -29,8 +29,8 @@ interface Props {
 }
 
 // Step durations for pct calculation (must match ProgressPanel.tsx)
-const STEP_DURATIONS = [4, 7, 6, 18, 8, 10, 6]
-const TOTAL_DURATION = 59
+const STEP_DURATIONS = [4, 7, 6, 30, 8, 10, 6]
+const TOTAL_DURATION = 71
 
 function computePct(step: number, imagesCurrent: number, imagesTotal: number): number {
   const completed = STEP_DURATIONS.slice(0, step - 1).reduce((a, b) => a + b, 0)

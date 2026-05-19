@@ -626,9 +626,9 @@ async function buildZonesWithGemma(
 
   const topCandidates = [...mcda]
     .sort((a, b) => b.mcdaScore - a.mcdaScore)
-    .slice(0, 10)
+    .slice(0, 8)
     .filter(p => p.bands.built <= 0.60 && p.areaHa >= 0.2 && p.bands.water <= 0.15)
-    .slice(0, 7)
+    .slice(0, 6)
 
   console.log(`[ndvi] Agent loop: ${topCandidates.length} candidates after pre-filter (from ${mcda.length} MCDA)`)
 
@@ -709,31 +709,57 @@ async function buildZonesWithGemma(
   }
 
   const agent2Sites = approved.slice(0, 5)
-  const agent2Results = await Promise.allSettled(
-    approved.map(async (p, i) => {
-      if (!agent2Sites.includes(p)) return fallbackPlan(p, i)
-      // Stagger 400ms per slot — slot 0 also waits so none fire simultaneously
-      await new Promise(r => setTimeout(r, i * 400))
+
+  // Run all slots in parallel — null signals failure (template will be injected)
+  const agent2Raw = await Promise.allSettled(
+    agent2Sites.map(async (p, i) => {
+      await new Promise(r => setTimeout(r, i * 150))
       try {
         const plans = await runAgentPlanner(
           [p], allCritiques, validations, [], districtName, cityName, language, i,
         )
-        if (!plans[0]) {
-          console.warn(`[ndvi] Agent 2 slot ${i} (${p.id}): runAgentPlanner returned empty — using fallback`)
-          return fallbackPlan(p, i)
-        }
+        if (!plans[0]) return null
         console.log(`[ndvi] Agent 2 slot ${i} (${p.id}): OK — ${plans[0].species?.length ?? 0} species`)
         return plans[0]
       } catch (err) {
         console.warn(`[ndvi] Agent 2 slot ${i} (${p.id}) threw:`, (err as Error).message)
-        return fallbackPlan(p, i)
+        return null
       }
     })
   )
-  const allPlans: AgentPlan[] = agent2Results.map((r, i) =>
-    r.status === 'fulfilled' ? r.value : fallbackPlan(approved[i], i)
-  )
-  console.log(`[ndvi] Agent 2 (${agent2Sites.length} parallel calls): ${allPlans.filter(p => p.plantable).length} plans`)
+
+  const rawPlans = agent2Raw.map(r => (r.status === 'fulfilled' ? r.value : null))
+  const successfulPlan = rawPlans.find(p => p !== null && (p.species?.length ?? 0) > 0) ?? null
+
+  // If every slot failed — single retry with slot 0
+  let templatePlan = successfulPlan
+  if (!templatePlan) {
+    console.warn('[ndvi] Agent 2: all slots failed — retrying once with slot 0')
+    try {
+      const retry = await runAgentPlanner(
+        [agent2Sites[0]], allCritiques, validations, [], districtName, cityName, language, 0,
+      )
+      if (retry[0]?.species?.length) templatePlan = retry[0]
+    } catch (err) {
+      console.warn('[ndvi] Agent 2 retry failed:', (err as Error).message)
+    }
+  }
+
+  // Build final plans — inject template species into failed slots
+  const allPlans: AgentPlan[] = agent2Sites.map((p, i) => {
+    const plan = rawPlans[i]
+    if (plan) return plan
+    const fb = fallbackPlan(p, i)
+    if (templatePlan) {
+      fb.species = templatePlan.species
+      fb.planting_method = templatePlan.planting_method
+      fb.reasoning = 'Species matched from sibling site — same climate zone'
+    }
+    return fb
+  })
+
+  const nOk = rawPlans.filter(Boolean).length
+  console.log(`[ndvi] Agent 2: ${nOk}/${agent2Sites.length} succeeded, ${agent2Sites.length - nOk} used ${templatePlan ? 'template' : 'formula fallback'}`)
 
   // Re-rank globally by MCDA score
   const patchScoreMap = new Map(topCandidates.map(p => [p.id, p]))

@@ -512,7 +512,7 @@ export async function validatePatches(
   token: string,
   config: CityConfig,
 ): Promise<ValidatedPatch[]> {
-  const work = patches.slice(0, 20)
+  const work = patches.slice(0, 8)
   console.log(`[gee] validatePatches: validating ${work.length} patches`)
 
   const bandsByIdx: Map<number, DWBandValues> = new Map()

@@ -1,8 +1,8 @@
 'use client'
 
 // Step durations (seconds) match the 7-step pipeline labels
-const STEP_DURATIONS = [4, 7, 6, 18, 8, 10, 6]
-const TOTAL_DURATION = STEP_DURATIONS.reduce((a, b) => a + b, 0) // 59
+const STEP_DURATIONS = [4, 7, 6, 30, 8, 10, 6]
+const TOTAL_DURATION = STEP_DURATIONS.reduce((a, b) => a + b, 0) // 71
 
 const STEPS = [
   { label: 'Connecting to Earth Engine',            detail: 'Authentication & project init'     },
