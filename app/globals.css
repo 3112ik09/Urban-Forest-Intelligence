@@ -89,9 +89,13 @@ html, body {
 
   .main-grid {
     grid-template-columns: 1fr;
-    grid-template-rows: 55vmax auto;
+    grid-template-rows: 42vh auto;
     gap: 12px;
     padding: 10px;
     min-height: unset;
+  }
+
+  .analysis-panel-mobile {
+    min-height: 300px;
   }
 }

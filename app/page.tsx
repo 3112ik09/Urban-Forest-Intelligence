@@ -44,6 +44,7 @@ export default function Home() {
 
   const mapRef = useRef<LeafletMap | null>(null)
   const zoneMarkerRef = useRef<Marker | null>(null)
+  const analysisPanelRef = useRef<HTMLDivElement | null>(null)
   const resultCache = useRef<Map<string, FullResult>>(new Map())
   const abortRef = useRef<AbortController | null>(null)
   const stepTimers = useRef<ReturnType<typeof setTimeout>[]>([])
@@ -171,6 +172,11 @@ export default function Home() {
     setImagesCurrent(0)
     setImagesTotal(0)
     setEstimatedSecsRemaining(59)
+
+    // On mobile, scroll down to show the analysis/progress panel
+    if (window.innerWidth <= 768) {
+      setTimeout(() => analysisPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100)
+    }
 
     // Return instantly from session cache
     const cacheKey = `${city?.osmId ?? 'local'}:${districtName}`
@@ -388,21 +394,23 @@ export default function Home() {
           )}
         </div>
 
-        <AnalysisPanel
-          district={selectedDistrict}
-          loading={loading}
-          loadingStep={loadingStep}
-          result={analysisResult}
-          partialResult={partialNdvi}
-          error={analysisError}
-          onZoneClick={handleZoneClick}
-          cityName={currentCity?.displayName.split(',')[0].trim()}
-          imagesCurrent={imagesCurrent}
-          imagesTotal={imagesTotal}
-          estimatedSecsRemaining={estimatedSecsRemaining}
-          language={reportLanguage}
-          onLanguageChange={handleSetLanguage}
-        />
+        <div className="analysis-panel-mobile" ref={analysisPanelRef}>
+          <AnalysisPanel
+            district={selectedDistrict}
+            loading={loading}
+            loadingStep={loadingStep}
+            result={analysisResult}
+            partialResult={partialNdvi}
+            error={analysisError}
+            onZoneClick={handleZoneClick}
+            cityName={currentCity?.displayName.split(',')[0].trim()}
+            imagesCurrent={imagesCurrent}
+            imagesTotal={imagesTotal}
+            estimatedSecsRemaining={estimatedSecsRemaining}
+            language={reportLanguage}
+            onLanguageChange={handleSetLanguage}
+          />
+        </div>
       </div>
     </main>
   )
