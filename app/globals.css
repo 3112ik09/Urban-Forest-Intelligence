@@ -45,3 +45,53 @@ html, body {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }
+
+/* ── Responsive layout ──────────────────────────────────────────────────── */
+.app-main {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #f9fafb;
+  overflow: hidden;
+}
+
+.search-row {
+  background: white;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 0.75rem 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.main-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 420px;
+  gap: 16px;
+  padding: 16px;
+  min-height: 0;
+}
+
+@media (max-width: 768px) {
+  .app-main {
+    height: auto;
+    min-height: 100svh;
+    overflow-y: auto;
+  }
+
+  .search-row {
+    padding: 0.6rem 1rem;
+    gap: 8px;
+  }
+
+  .main-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: 55vmax auto;
+    gap: 12px;
+    padding: 10px;
+    min-height: unset;
+  }
+}

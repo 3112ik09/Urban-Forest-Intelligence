@@ -26,24 +26,41 @@ export default function HeroStats({ ndviData, cityName, totalDistricts }: Props)
   return (
     <>
       <style>{`
+        .hero-header {
+          background: white;
+          border-bottom: 0.5px solid #e5e7eb;
+          padding: 1rem 1.5rem;
+          flex-shrink: 0;
+          display: flex;
+          align-items: center;
+          justify-content: flex-start;
+          gap: 24px;
+          flex-wrap: wrap;
+        }
+        .hero-title-text {
+          font-size: 26px;
+          font-weight: 700;
+          color: #111827;
+          white-space: nowrap;
+          letter-spacing: -0.4px;
+        }
+        .hero-stats-grid {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 10px;
+          margin-left: auto;
+        }
         @media (max-width: 640px) {
-          .hero-stats-grid { grid-template-columns: repeat(2, 1fr) !important; }
+          .hero-header { padding: 0.6rem 1rem; gap: 8px; }
+          .hero-title-text { font-size: 18px; }
+          .hero-stats-grid { grid-template-columns: repeat(3, 1fr); margin-left: 0; gap: 6px; width: 100%; }
         }
       `}</style>
-      <div style={{
-        background: 'white',
-        borderBottom: '0.5px solid #e5e7eb',
-        padding: '1rem 1.5rem',
-        flexShrink: 0,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'flex-start',
-        gap: '24px',
-      }}>
+      <div className="hero-header">
         {/* Left — title lockup */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: '0 0 auto' }}>
           <IconTrees size={24} color="#3B6D11" stroke={1.75} />
-          <span style={{ fontSize: '26px', fontWeight: 700, color: '#111827', whiteSpace: 'nowrap', letterSpacing: '-0.4px' }}>
+          <span className="hero-title-text">
             Urban Forest Intelligence
           </span>
           <div style={{
@@ -58,15 +75,7 @@ export default function HeroStats({ ndviData, cityName, totalDistricts }: Props)
         </div>
 
         {/* Right — stat cards */}
-        <div
-          className="hero-stats-grid"
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(3, 1fr)',
-            gap: '10px',
-            marginLeft: 'auto',
-          }}
-        >
+        <div className="hero-stats-grid">
           {cards.map(card => (
             <div
               key={card.label}

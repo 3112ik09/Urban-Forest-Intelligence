@@ -300,7 +300,7 @@ export default function Home() {
   }, [])
 
   return (
-    <main style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: '#f9fafb', overflow: 'hidden' }}>
+    <main className="app-main">
       <HeroStats
         ndviData={ndviData}
         cityName={currentCity?.displayName.split(',')[0].trim()}
@@ -308,10 +308,7 @@ export default function Home() {
       />
 
       {/* City search bar */}
-      <div style={{
-        background: 'white', borderBottom: '1px solid #e5e7eb',
-        padding: '0.75rem 1.5rem', display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0,
-      }}>
+      <div className="search-row">
         <input
           type="text"
           value={cityInput}
@@ -354,14 +351,7 @@ export default function Home() {
         })()}
       </div>
 
-      <div style={{
-        flex: 1,
-        display: 'grid',
-        gridTemplateColumns: '1fr 420px',
-        gap: '16px',
-        padding: '16px',
-        minHeight: 0,
-      }}>
+      <div className="main-grid">
         <div style={{ position: 'relative', minHeight: 0 }}>
           <CityMap
             districts={cityDistricts}
